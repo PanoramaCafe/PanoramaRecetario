@@ -1,0 +1,110 @@
+name: Fix Recetario
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: ${{ !contains(github.event.head_commit.message, 'fix: corregir costos por unidad y alta de ingredientes') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply fixes
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          p = Path('index.html')
+          s = p.read_text(encoding='utf-8')
+
+          # 1) Costeo: Inventario es la fuente de verdad. Si existe metadata
+          # de compra, calcula el costo de la unidad de uso. Si el registro
+          # antiguo trae, por ejemplo, $24.9167 con unidad ml y precio $299,
+          # reconoce que $24.9167 es el costo de una presentación de 1 L y lo
+          # convierte a $0.0249167/ml.
+          new_cost = r'''function getInsumoUnitCost(ins) {
+      if (!ins) return 0;
+      if (ins.costoModo === 'directo' && isFinite(Number(ins.costoDirecto))) return Number(ins.costoDirecto) || 0;
+
+      const target = unitFactorToBase(ins.unidadBase || ins.unidadUso || ins.unit);
+      const purchasePrice = Number(ins.precioCompraPresentacion ?? ins.costoCompra ?? ins.purchasePrice) || 0;
+      const contentQty = Number(ins.purchaseContentQty ?? ins.contenidoPresentacion ?? ins.contenido ?? 0) || 0;
+      const contentUnit = ins.purchaseContentUnit || ins.unidadCompra || '';
+      const content = unitFactorToBase(contentUnit);
+      const units = Number(ins.purchaseUnitsPerPresentation ?? ins.unidadesPorCompra ?? ins.purchaseUnitQty ?? ins.unitsPerPurchase) || 0;
+      const storedCost = Number(ins.costoPorUnidadUso);
+      const aprovechamiento = Math.max(0.0001, Math.min(1, (Number(ins.aprovechamiento ?? (100 - Number(ins.merma || 0)))) / 100));
+
+      // Caso correcto: conocemos precio, unidades, contenido y unidad.
+      if (purchasePrice > 0 && contentQty > 0 && units > 0 && content && target && content.kind === target.kind) {
+        const totalTargetUnits = units * contentQty * content.factor / target.factor;
+        if (totalTargetUnits > 0) return (purchasePrice / totalTargetUnits) / aprovechamiento;
+      }
+
+      // Registros antiguos: costo guardado como costo de presentación aunque
+      // la unidad visible ya diga ml/g. Inferimos cuántas presentaciones se
+      // compraron con precio / costo y asumimos 1 L o 1 kg cuando no existe
+      // metadata de contenido suficiente.
+      if (purchasePrice > 0 && storedCost > 0 && target && (target.kind === 'vol' || target.kind === 'mass')) {
+        const ratio = purchasePrice / storedCost;
+        const rounded = Math.round(ratio);
+        if (rounded >= 1 && rounded <= 1000 && Math.abs(ratio - rounded) < 0.02) {
+          const assumedPresentationUnits = 1000 / target.factor;
+          const cost = purchasePrice / (rounded * assumedPresentationUnits);
+          if (isFinite(cost) && cost > 0) return cost / aprovechamiento;
+        }
+      }
+
+      if (isFinite(storedCost) && storedCost > 0) return storedCost / aprovechamiento;
+
+      const purchase = Number(ins.costoCompra) || 0;
+      const contenido = Number(ins.contenidoPresentacion || ins.contenido || 0);
+      const unidades = Math.max(1, Number(ins.unidadesPorCompra || ins.unitsPerPurchase || 1));
+      const factor = Number(ins.factor) || ((String(ins.unidadCompra || '').toLowerCase() === 'kg' || String(ins.unidadCompra || '').toLowerCase() === 'l') ? 1000 : 1);
+      const base = contenido > 0 ? purchase / (unidades * contenido * factor) : purchase / (unidades * factor);
+      return base / aprovechamiento;
+    }'''
+
+          pattern = r'function getInsumoUnitCost\(ins\) \{.*?\n    \}'
+          s2, n = re.subn(pattern, new_cost, s, count=1, flags=re.S)
+          if n != 1:
+              raise SystemExit('No se encontró getInsumoUnitCost')
+          s = s2
+
+          # 2) Evita doble ejecución del botón + Añadir (que provocaba que el
+          # ingrediente se agregara y después apareciera el aviso de cantidad 0).
+          old = """    function addIngredientToCurrentRecipe(event) {\n      if (event && typeof event.preventDefault === 'function') event.preventDefault();\n      const select = document.getElementById('rec-select-insumo');"""
+          new = """    function addIngredientToCurrentRecipe(event) {\n      if (window.__recetarioAddingIngredient) return false;\n      window.__recetarioAddingIngredient = true;\n      if (event && typeof event.preventDefault === 'function') event.preventDefault();\n      const select = document.getElementById('rec-select-insumo');"""
+          if old not in s:
+              raise SystemExit('No se encontró inicio de addIngredientToCurrentRecipe')
+          s = s.replace(old, new, 1)
+
+          old_success = """      if (qtyInput) qtyInput.value = '';\n      renderRecipeIngredientsTable();\n      updateSelectedInsumoInfo();\n      return false;\n    }"""
+          new_success = """      if (qtyInput) qtyInput.value = '';\n      renderRecipeIngredientsTable();\n      updateSelectedInsumoInfo();\n      window.setTimeout(function(){ window.__recetarioAddingIngredient = false; }, 120);\n      return false;\n    }"""
+          if old_success not in s:
+              raise SystemExit('No se encontró final de addIngredientToCurrentRecipe')
+          s = s.replace(old_success, new_success, 1)
+
+          # Si falla validación, libera el bloqueo para permitir reintentar.
+          s = s.replace("""        if (select) select.focus();\n        return false;\n      }\n      if (!Number.isFinite(cantidad) || cantidad <= 0) {""", """        if (select) select.focus();\n        window.__recetarioAddingIngredient = false;\n        return false;\n      }\n      if (!Number.isFinite(cantidad) || cantidad <= 0) {""", 1)
+          s = s.replace("""        if (qtyInput) qtyInput.focus();\n        return false;\n      }\n\n      const existing""", """        if (qtyInput) qtyInput.focus();\n        window.__recetarioAddingIngredient = false;\n        return false;\n      }\n\n      const existing""", 1)
+
+          p.write_text(s, encoding='utf-8')
+          print('index.html actualizado:', len(s), 'bytes')
+
+      - name: Commit fixed app and remove one-time workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/fix-recetario.yml
+          git add index.html
+          git commit -m "fix: corregir costos por unidad y alta de ingredientes"
+          git push
