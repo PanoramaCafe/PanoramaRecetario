@@ -11,25 +11,151 @@
   <div id="app-loading" style="min-height:100vh;display:flex;align-items:center;justify-content:center;font-weight:700;">Cargando Panorama Recetario…</div>
   <script>
     (async function () {
-      // Conservamos la aplicación completa en un commit inmutable y usamos este
-      // archivo como punto de entrada estable para GitHub Pages.
       const SOURCE = 'https://raw.githubusercontent.com/PanoramaCafe/PanoramaRecetario/d9779bfd644cc90649d6f670930879bdf0fc6ce6/index.html';
       try {
         const response = await fetch(SOURCE, { cache: 'no-store' });
         if (!response.ok) throw new Error('HTTP ' + response.status);
         let html = await response.text();
 
-        // BUG CORREGIDO: el archivo fuente tenía el onclick inline del botón
-        // + un segundo addEventListener para el mismo botón. El primer handler
-        // agregaba el ingrediente y limpiaba la cantidad; el segundo se ejecutaba
-        // inmediatamente después, veía 0 y mostraba la falsa alerta de cantidad.
+        // Corrige el doble evento de Safari en + Añadir.
         html = html.replace(/\n\s*\/\/ Refuerzo: el bot[oó]n de a[ñn]adir tambi[eé]n funciona[\s\S]*?const qty = document\.getElementById\('rec-cant-insumo'\);[\s\S]*?\}\);\n\s*\}\);/m, '\n    });');
-
-        // Protección adicional contra doble toque/eventos duplicados en Safari.
         html = html.replace(
           'function addIngredientToCurrentRecipe(event) {',
           'function addIngredientToCurrentRecipe(event) {\n      if (window.__addingIngredientLock) return false;\n      window.__addingIngredientLock = true;\n      setTimeout(function(){ window.__addingIngredientLock = false; }, 250);'
         );
+
+        // ===== NUEVAS FUNCIONES: DUPLICAR + EXPORTAR FICHA COMPLETA =====
+        const patchScript = `
+<script>
+(function () {
+  function csvCell(value) {
+    const s = value == null ? '' : String(value);
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+
+  // Duplica una receta como una nueva ficha independiente.
+  window.duplicateRecipe = function (id) {
+    const original = appState.recetas.find(function (r) { return r.id === id; });
+    if (!original) return;
+
+    const suggested = String(original.nombre || '') + ' — Variante';
+    const newName = window.prompt('Nombre de la nueva receta:', suggested);
+    if (newName === null) return;
+    const cleanName = newName.trim();
+    if (!cleanName) {
+      alert('Escribe un nombre para la nueva receta.');
+      return;
+    }
+
+    const now = new Date();
+    const clone = JSON.parse(JSON.stringify(original));
+    clone.id = 'rec_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+    clone.nombre = cleanName;
+    clone.ventas = 0;
+    clone.historial = [{
+      fecha: now.toLocaleDateString('es-MX'),
+      costo: calculateRecipeCost(clone),
+      precio: Number(clone.precio) || 0,
+      motivo: 'Duplicada de ' + (original.nombre || 'receta original')
+    }];
+
+    appState.recetas.push(clone);
+    saveToStorage();
+    renderRecipesTable();
+    alert('Receta duplicada correctamente. Ahora puedes modificar sus ingredientes y datos.');
+    editRecipe(clone.id);
+  };
+
+  // Exporta una ficha técnica completa, no solamente los indicadores finales.
+  // Compatible con Excel, Numbers y Google Sheets mediante CSV UTF-8.
+  window.exportSingleRecipeExcel = function (id) {
+    const rec = appState.recetas.find(function (r) { return r.id === id; });
+    if (!rec) return;
+
+    const cost = calculateRecipeCost(rec);
+    const price = Number(rec.precio) || 0;
+    const margin = price - cost;
+    const foodCostPct = price > 0 ? (cost / price) * 100 : 0;
+    const rendimiento = Number(rec.rendimiento) || 1;
+    const costPerYield = rendimiento > 0 ? cost / rendimiento : cost;
+
+    let csv = '\\uFEFF';
+    csv += 'PANORAMA RECETARIO — FICHA TÉCNICA COMPLETA\\n';
+    csv += 'Producto;' + csvCell(rec.nombre) + '\\n';
+    csv += 'Categoría;' + csvCell(rec.categoria || '') + '\\n';
+    csv += 'Precio de venta ($);' + price.toFixed(2) + '\\n';
+    csv += 'Ventas mensuales (uds);' + (Number(rec.ventas) || 0) + '\\n';
+    csv += 'Rendimiento / porciones;' + rendimiento + '\\n';
+    csv += 'Costo total de la receta ($);' + cost.toFixed(2) + '\\n';
+    csv += 'Costo por porción / unidad de rendimiento ($);' + costPerYield.toFixed(2) + '\\n';
+    csv += 'Margen de contribución ($);' + margin.toFixed(2) + '\\n';
+    csv += 'Food Cost (%);' + foodCostPct.toFixed(2) + '%\\n';
+    csv += '\\n';
+
+    csv += 'DESGLOSE COMPLETO DE INGREDIENTES\\n';
+    csv += 'Ingrediente;Cantidad de uso;Unidad;Costo unitario ($);Costo proporcional ($);Aprovechamiento (%)\\n';
+
+    (rec.ingredientes || []).forEach(function (ing) {
+      const ins = appState.insumos.find(function (i) { return i.id === ing.insumoId; });
+      const cantidad = Number(ing.cantidad) || 0;
+      const unit = ins ? getInsumoUnidadBase(ins) : '';
+      const unitCost = ins ? getInsumoUnitCost(ins) : 0;
+      const subtotal = unitCost * cantidad;
+      const aprovechamiento = ins ? getInsumoAprovechamiento(ins) : 0;
+      csv += csvCell(ins ? ins.nombre : 'Insumo eliminado') + ';' +
+        cantidad.toFixed(2) + ';' +
+        csvCell(unit) + ';' +
+        unitCost.toFixed(6) + ';' +
+        subtotal.toFixed(2) + ';' +
+        Number(aprovechamiento).toFixed(1) + '%\\n';
+    });
+
+    csv += '\\n';
+    csv += 'TOTALES; ; ; ;' + cost.toFixed(2) + ';\\n';
+    csv += '\\n';
+    csv += 'PROCEDIMIENTO / PREPARACIÓN\\n';
+    csv += csvCell(rec.procedimiento || '') + '\\n';
+    csv += '\\n';
+    csv += 'NOTAS / ESTÁNDAR DE PRESENTACIÓN\\n';
+    csv += csvCell(rec.notas || '') + '\\n';
+    csv += '\\n';
+    csv += 'HISTORIAL DE COSTOS\\n';
+    csv += 'Fecha;Costo ($);Precio de venta ($);Motivo\\n';
+    (rec.historial || []).forEach(function (h) {
+      csv += csvCell(h.fecha || '') + ';' + Number(h.costo || 0).toFixed(2) + ';' + Number(h.precio || 0).toFixed(2) + ';' + csvCell(h.motivo || '') + '\\n';
+    });
+
+    const safeName = String(rec.nombre || 'receta').replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ_-]+/g, '_');
+    downloadFile(csv, 'Ficha_Tecnica_Completa_' + safeName + '.csv', 'text/csv;charset=utf-8;');
+  };
+
+  // La tabla original se conserva; solo añadimos el botón Duplicar a cada receta.
+  const originalRenderRecipesTable = window.renderRecipesTable;
+  window.renderRecipesTable = function () {
+    originalRenderRecipesTable();
+    const tbody = document.getElementById('recipes-list-table');
+    if (!tbody) return;
+
+    tbody.querySelectorAll('button').forEach(function (btn) {
+      if (btn.textContent.trim() !== 'Editar' || btn.dataset.duplicateAdded === '1') return;
+      const match = String(btn.getAttribute('onclick') || '').match(/editRecipe\\('([^']+)'\\)/);
+      if (!match) return;
+      const id = match[1];
+      const dup = document.createElement('button');
+      dup.type = 'button';
+      dup.className = 'btn btn-gold btn-sm';
+      dup.textContent = 'Duplicar';
+      dup.onclick = function () { window.duplicateRecipe(id); };
+      btn.dataset.duplicateAdded = '1';
+      btn.parentNode.insertBefore(dup, btn.nextSibling);
+    });
+  };
+})();
+</script>`;
+
+        // Insertamos las mejoras antes del cierre del body para que sobrescriban
+        // las funciones originales antes de que DOMContentLoaded las utilice.
+        html = html.replace('</body>', patchScript + '\n</body>');
 
         document.open();
         document.write(html);
