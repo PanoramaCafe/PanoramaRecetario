@@ -675,7 +675,7 @@
       <div class="card">
         <div class="card-title">📥 Importar Inventario y Datos</div>
         <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.25rem;">
-          Importa los insumos que ya tienes en <strong>Panorama Inventario</strong> para utilizarlos como ingredientes de tus recetas. Se conserva el precio de compra y el costo calculado por unidad de uso.
+          Importa los insumos que ya tienes en <strong>Panorama Inventario</strong> para utilizarlos como ingredientes de tus recetas. Se conserva el precio de compra y, sobre todo, el costo por unidad de uso que ya calcula Panorama Inventario (ml, g, pza, etc.).
         </p>
 
         <div style="background: var(--status-success-bg); padding: 1.25rem; border-radius: 0.75rem; border: 1px solid var(--status-success-border); margin-bottom: 1.5rem;">
@@ -786,12 +786,14 @@
       const rawUnit = String(ins.unidadBase || '').toLowerCase();
       // Normaliza registros antiguos/importados que guardaron L o kg como unidad de uso.
       // El Recetario trabaja siempre en ml, g o pza para que 150 ml se cobre como 150 ml.
-      if (compra === 'l' && ['l','lt','litro','litros'].includes(rawUnit)) {
+      if (!ins.__recetarioUnidadNormalizada && compra === 'l' && ['l','lt','litro','litros'].includes(rawUnit)) {
         if (isFinite(Number(ins.costoPorUnidadUso))) ins.costoPorUnidadUso = Number(ins.costoPorUnidadUso) / 1000;
         ins.unidadBase = 'ml';
-      } else if (compra === 'kg' && ['kg','kilogramo','kilogramos'].includes(rawUnit)) {
+        ins.__recetarioUnidadNormalizada = true;
+      } else if (!ins.__recetarioUnidadNormalizada && compra === 'kg' && ['kg','kilogramo','kilogramos'].includes(rawUnit)) {
         if (isFinite(Number(ins.costoPorUnidadUso))) ins.costoPorUnidadUso = Number(ins.costoPorUnidadUso) / 1000;
         ins.unidadBase = 'g';
+        ins.__recetarioUnidadNormalizada = true;
       } else {
         ins.unidadBase = getInsumoUnidadBase(ins);
       }
@@ -868,7 +870,7 @@
       const current = select.value;
       const list = appState.insumos.slice().sort((a,b) => String(a.nombre||'').localeCompare(String(b.nombre||''),'es',{sensitivity:'base'}))
         .filter(ins => !search || String(ins.nombre||'').toLowerCase().includes(search) || String(ins.categoria||'').toLowerCase().includes(search));
-      select.innerHTML = '<option value="">-- Seleccionar ingrediente --</option>' + list.map(ins => '<option value="'+ins.id+'">'+ins.nombre+' — $'+getInsumoUnitCost(ins).toFixed(4)+'/'+getInsumoUnidadBase(ins)+'</option>').join('');
+      select.innerHTML = '<option value="">-- Seleccionar ingrediente --</option>' + list.map(ins => '<option value="'+ins.id+'">'+ins.nombre+' — $'+getInsumoUnitCost(ins).toFixed(6)+'/'+getInsumoUnidadBase(ins)+'</option>').join('');
       if (list.some(x => x.id === current)) select.value = current;
       updateSelectedInsumoInfo();
     }
@@ -996,23 +998,43 @@
       if (event && typeof event.preventDefault === 'function') event.preventDefault();
       const select = document.getElementById('rec-select-insumo');
       const qtyInput = document.getElementById('rec-cant-insumo');
-      const insumoId = select ? select.value : '';
-      const cantidad = qtyInput ? parseFloat(qtyInput.value) : NaN;
-      let resolvedId = insumoId;
-      if (!resolvedId) {
-        const q = (document.getElementById('rec-search-insumo')?.value || '').trim().toLowerCase();
-        const matches = q ? appState.insumos.filter(i => String(i.nombre||'').toLowerCase().includes(q)) : [];
-        if (matches.length === 1) resolvedId = matches[0].id;
+      const searchInput = document.getElementById('rec-search-insumo');
+      const rawSelectId = select ? String(select.value || '').trim() : '';
+      const cantidad = qtyInput ? Number(qtyInput.value) : NaN;
+      let resolvedId = rawSelectId;
+
+      // Si el usuario buscó un insumo pero no abrió/seleccionó el select,
+      // tomamos el único resultado coincidente automáticamente.
+      if (!resolvedId && searchInput) {
+        const q = String(searchInput.value || '').trim().toLocaleLowerCase('es-MX');
+        if (q) {
+          const matches = appState.insumos.filter(function(i) {
+            return String(i.nombre || '').toLocaleLowerCase('es-MX').includes(q);
+          });
+          if (matches.length === 1) resolvedId = String(matches[0].id);
+        }
       }
-      if (!resolvedId || !isFinite(cantidad) || cantidad <= 0) {
-        alert('Selecciona un insumo de la lista e ingresa una cantidad válida.');
-        return;
+
+      const insumo = appState.insumos.find(function(i) { return String(i.id) === resolvedId; });
+      if (!insumo) {
+        alert('Selecciona un ingrediente de la lista.');
+        if (select) select.focus();
+        return false;
       }
-      const existing = currentRecipeIngredients.find(function(i) { return i.insumoId === resolvedId; });
-      if (existing) existing.cantidad += cantidad;
+      if (!Number.isFinite(cantidad) || cantidad <= 0) {
+        alert('Ingresa una cantidad de uso mayor que 0.');
+        if (qtyInput) qtyInput.focus();
+        return false;
+      }
+
+      const existing = currentRecipeIngredients.find(function(i) { return String(i.insumoId) === resolvedId; });
+      if (existing) existing.cantidad = Number(existing.cantidad || 0) + cantidad;
       else currentRecipeIngredients.push({ insumoId: resolvedId, cantidad: cantidad });
-      document.getElementById('rec-cant-insumo').value = '';
+
+      if (qtyInput) qtyInput.value = '';
       renderRecipeIngredientsTable();
+      updateSelectedInsumoInfo();
+      return false;
     }
 
     function removeIngredientFromCurrentRecipe(index) {
@@ -1294,7 +1316,9 @@
               contacto: sup && sup.contact ? sup.contact : '',
               unidadCompra: product.purchaseUnit || 'pza',
               costoCompra: hasPurchasePrice ? purchasePrice : (hasCost ? importedCost : 0),
-              costoPorUnidadUso: hasCost ? importedCost / ((['l','kg'].includes(String(product.purchaseUnit || '').toLowerCase()) && ['l','lt','litro','litros','kg','kilogramo','kilogramos'].includes(String(product.unit || '').toLowerCase())) ? 1000 : 1) : 0,
+              // Panorama Inventario ya calcula `cost` como costo por unidad de uso
+              // indicada en `unit` (ml, g, pza, etc.). NO volver a dividir aquí.
+              costoPorUnidadUso: hasCost ? importedCost : 0,
               costoModo: hasCost ? 'inventario' : 'conversion',
               aprovechamiento: 100,
               merma: 0,
@@ -1657,6 +1681,15 @@
       renderRecipesTable();
       renderInsumoOptions();
       updateSummaryCounts();
+
+      // Refuerzo: el botón de añadir también funciona mediante listener
+      // directo, independientemente de cómo Safari procese el HTML inline.
+      const addBtn = document.querySelector('#tab-recetas button[onclick*="addIngredientToCurrentRecipe"]');
+      if (addBtn) addBtn.addEventListener('click', function(e) { addIngredientToCurrentRecipe(e); });
+      const qty = document.getElementById('rec-cant-insumo');
+      if (qty) qty.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); addIngredientToCurrentRecipe(e); }
+      });
     });
   </script>
 </body>
