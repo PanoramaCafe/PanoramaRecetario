@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Apply fixes
-        shell: python
+        shell: python {0}
         run: |
           from pathlib import Path
           import re
@@ -24,11 +24,6 @@ jobs:
           p = Path('index.html')
           s = p.read_text(encoding='utf-8')
 
-          # 1) Costeo: Inventario es la fuente de verdad. Si existe metadata
-          # de compra, calcula el costo de la unidad de uso. Si el registro
-          # antiguo trae, por ejemplo, $24.9167 con unidad ml y precio $299,
-          # reconoce que $24.9167 es el costo de una presentación de 1 L y lo
-          # convierte a $0.0249167/ml.
           new_cost = r'''function getInsumoUnitCost(ins) {
       if (!ins) return 0;
       if (ins.costoModo === 'directo' && isFinite(Number(ins.costoDirecto))) return Number(ins.costoDirecto) || 0;
@@ -42,16 +37,11 @@ jobs:
       const storedCost = Number(ins.costoPorUnidadUso);
       const aprovechamiento = Math.max(0.0001, Math.min(1, (Number(ins.aprovechamiento ?? (100 - Number(ins.merma || 0)))) / 100));
 
-      // Caso correcto: conocemos precio, unidades, contenido y unidad.
       if (purchasePrice > 0 && contentQty > 0 && units > 0 && content && target && content.kind === target.kind) {
         const totalTargetUnits = units * contentQty * content.factor / target.factor;
         if (totalTargetUnits > 0) return (purchasePrice / totalTargetUnits) / aprovechamiento;
       }
 
-      // Registros antiguos: costo guardado como costo de presentación aunque
-      // la unidad visible ya diga ml/g. Inferimos cuántas presentaciones se
-      // compraron con precio / costo y asumimos 1 L o 1 kg cuando no existe
-      // metadata de contenido suficiente.
       if (purchasePrice > 0 && storedCost > 0 && target && (target.kind === 'vol' || target.kind === 'mass')) {
         const ratio = purchasePrice / storedCost;
         const rounded = Math.round(ratio);
@@ -73,13 +63,10 @@ jobs:
     }'''
 
           pattern = r'function getInsumoUnitCost\(ins\) \{.*?\n    \}'
-          s2, n = re.subn(pattern, new_cost, s, count=1, flags=re.S)
+          s, n = re.subn(pattern, new_cost, s, count=1, flags=re.S)
           if n != 1:
               raise SystemExit('No se encontró getInsumoUnitCost')
-          s = s2
 
-          # 2) Evita doble ejecución del botón + Añadir (que provocaba que el
-          # ingrediente se agregara y después apareciera el aviso de cantidad 0).
           old = """    function addIngredientToCurrentRecipe(event) {\n      if (event && typeof event.preventDefault === 'function') event.preventDefault();\n      const select = document.getElementById('rec-select-insumo');"""
           new = """    function addIngredientToCurrentRecipe(event) {\n      if (window.__recetarioAddingIngredient) return false;\n      window.__recetarioAddingIngredient = true;\n      if (event && typeof event.preventDefault === 'function') event.preventDefault();\n      const select = document.getElementById('rec-select-insumo');"""
           if old not in s:
@@ -92,7 +79,6 @@ jobs:
               raise SystemExit('No se encontró final de addIngredientToCurrentRecipe')
           s = s.replace(old_success, new_success, 1)
 
-          # Si falla validación, libera el bloqueo para permitir reintentar.
           s = s.replace("""        if (select) select.focus();\n        return false;\n      }\n      if (!Number.isFinite(cantidad) || cantidad <= 0) {""", """        if (select) select.focus();\n        window.__recetarioAddingIngredient = false;\n        return false;\n      }\n      if (!Number.isFinite(cantidad) || cantidad <= 0) {""", 1)
           s = s.replace("""        if (qtyInput) qtyInput.focus();\n        return false;\n      }\n\n      const existing""", """        if (qtyInput) qtyInput.focus();\n        window.__recetarioAddingIngredient = false;\n        return false;\n      }\n\n      const existing""", 1)
 
