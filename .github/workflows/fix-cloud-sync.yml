@@ -13,22 +13,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Remove invalid Authorization header from client REST calls
+      - name: Remove Authorization header from browser REST calls
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
           p = Path('index.html')
           s = p.read_text(encoding='utf-8')
-          s2 = re.sub(r'^\s*Authorization:\s*["\x27]?Bearer[^\n]*\n', '', s, flags=re.MULTILINE)
-          if s2 == s:
-              raise SystemExit('No Authorization header found; inspect current file before changing it')
-          p.write_text(s2, encoding='utf-8')
+          lines = s.splitlines(keepends=True)
+          kept = [line for line in lines if 'Authorization:' not in line]
+          if len(kept) == len(lines):
+              raise SystemExit('No Authorization header found')
+          p.write_text(''.join(kept), encoding='utf-8')
           PY
       - name: Commit fix
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add index.html
-          git diff --cached --quiet || git commit -m 'Fix Supabase client authentication header'
+          git diff --cached --quiet || git commit -m 'Fix Supabase browser authentication'
           git push
