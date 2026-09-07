@@ -34,11 +34,14 @@
 <script>
 (function () {
   const CLOUD_FUNCTION = "${CLOUD_FUNCTION}";
+  const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_S_wZkfLNvx0mnHBLGHcfgg_Q_SkycdW";
+  const CLOUD_HEADERS = { "apikey": SUPABASE_PUBLISHABLE_KEY, "Authorization": "Bearer " + SUPABASE_PUBLISHABLE_KEY };
   const CLOUD_STORAGE_KEY = "recetario_pro_data_v5";
   let cloudHydrating = true;
   let cloudSaveTimer = null;
   let cloudUpdatedAt = null;
   let cloudBusy = false;
+  let pendingCloudSave = false;
 
   function setSyncStatus(text, kind) {
     let el = document.getElementById("cloud-sync-status");
@@ -67,7 +70,7 @@
     };
   }
   async function cloudGet() {
-    const res = await fetch(CLOUD_FUNCTION, { method:"GET", cache:"no-store" });
+    const res = await fetch(CLOUD_FUNCTION, { method:"GET", cache:"no-store", headers: CLOUD_HEADERS });
     if (!res.ok) throw new Error("GET " + res.status + " " + await res.text());
     const rows = await res.json();
     return Array.isArray(rows) && rows.length ? rows[0] : null;
@@ -76,7 +79,7 @@
     const res = await fetch(CLOUD_FUNCTION, {
       method:"POST",
       cache:"no-store",
-      headers:{"Content-Type":"application/json"},
+      headers: Object.assign({"Content-Type":"application/json"}, CLOUD_HEADERS),
       body:JSON.stringify({data:normalize(state || appState)})
     });
     if (!res.ok) throw new Error("POST " + res.status + " " + await res.text());
@@ -119,16 +122,28 @@
 
   window.queueCloudSave = function () {
     if (cloudHydrating) return;
-    setSyncStatus("☁️ Guardando…", "info");
+    pendingCloudSave = true;
+    setSyncStatus(navigator.onLine ? "☁️ Guardando…" : "📴 Sin conexión (se guardará al reconectar)", navigator.onLine ? "info" : "error");
     clearTimeout(cloudSaveTimer);
     cloudSaveTimer = setTimeout(async function () {
       if (cloudBusy) return;
+      if (!navigator.onLine) { setSyncStatus("📴 Sin conexión (pendiente)", "error"); return; }
       cloudBusy = true;
-      try { await cloudPut(appState); setSyncStatus("☁️ Sincronizado", "ok"); }
+      try { await cloudPut(appState); pendingCloudSave = false; setSyncStatus("☁️ Sincronizado", "ok"); }
       catch (err) { console.error("Error guardando Recetario:", err); setSyncStatus("⚠️ No se pudo sincronizar", "error"); }
       finally { cloudBusy = false; }
     }, 400);
   };
+
+  async function retryPendingSyncIfOnline() {
+    if (!pendingCloudSave || cloudBusy || !navigator.onLine) return;
+    cloudBusy = true;
+    setSyncStatus("☁️ Reconectado, sincronizando…", "info");
+    try { await cloudPut(appState); pendingCloudSave = false; setSyncStatus("☁️ Sincronizado", "ok"); }
+    catch (err) { console.error("Reintento de sincronización falló:", err); setSyncStatus("⚠️ No se pudo sincronizar", "error"); }
+    finally { cloudBusy = false; }
+  }
+  window.addEventListener("online", retryPendingSyncIfOnline);
 
   window.syncRecetarioNow = async function () {
     clearTimeout(cloudSaveTimer);
@@ -142,6 +157,7 @@
 
   async function checkCloudForChanges() {
     if (cloudBusy || cloudHydrating) return;
+    if (pendingCloudSave) { retryPendingSyncIfOnline(); return; }
     try {
       const row = await cloudGet();
       if (!row || !row.updated_at || !cloudUpdatedAt) return;
