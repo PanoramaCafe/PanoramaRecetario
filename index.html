@@ -12,18 +12,19 @@
 <script>
 (async function () {
   const SOURCE = "https://raw.githubusercontent.com/PanoramaCafe/PanoramaRecetario/d9779bfd644cc90649d6f670930879bdf0fc6ce6/index.html";
-  const CLOUD_FUNCTION = "https://dtmhffgpwxzdncbuoohb.supabase.co/functions/v1/panorama-recetario-sync";
+  const SUPABASE_URL = "https://dtmhffgpwxzdncbuoohb.supabase.co";
+  const SUPABASE_KEY = "sb_publishable_S_wZkfLNvx0mnHBLGHcfgg_Q_SkycdW";
+  const CLOUD_ROW_ID = "default";
   try {
     const response = await fetch(SOURCE, { cache: "no-store" });
     if (!response.ok) throw new Error("HTTP " + response.status);
     let html = await response.text();
 
-    // Corrige el doble disparo del botón + Añadir en Safari/iPad.
+    // Evita el doble disparo del botón + Añadir en Safari/iPad.
     html = html.replace(/\n\s*\/\/ Refuerzo: el bot[oó]n de a[ñn]adir tambi[eé]n funciona[\s\S]*?const qty = document\.getElementById\('rec-cant-insumo'\);[\s\S]*?\}\);\n\s*\}\);/m, "\n    });");
     html = html.replace("function addIngredientToCurrentRecipe(event) {", "function addIngredientToCurrentRecipe(event) {\n      if (window.__addingIngredientLock) return false;\n      window.__addingIngredientLock = true;\n      setTimeout(function(){ window.__addingIngredientLock = false; }, 250);");
 
-    // Importante: reemplaza la función ORIGINAL, no window.saveToStorage,
-    // porque la aplicación usa la referencia léxica saveToStorage().
+    // Conecta el guardado interno de la app con la sincronización en la nube.
     html = html.replace(/function saveToStorage\(\) \{[\s\S]*?\n    \}/m, `function saveToStorage() {
       safeStorage.setItem('recetario_pro_data_v5', JSON.stringify(appState));
       updateSummaryCounts();
@@ -33,25 +34,26 @@
     const patchScript = `
 <script>
 (function () {
-  const CLOUD_FUNCTION = "${CLOUD_FUNCTION}";
-  const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_S_wZkfLNvx0mnHBLGHcfgg_Q_SkycdW";
-  const CLOUD_HEADERS = { "apikey": SUPABASE_PUBLISHABLE_KEY, "Authorization": "Bearer " + SUPABASE_PUBLISHABLE_KEY };
-  const CLOUD_STORAGE_KEY = "recetario_pro_data_v5";
-  let cloudHydrating = true;
-  let cloudSaveTimer = null;
+  const SUPABASE_URL = "${SUPABASE_URL}";
+  const SUPABASE_KEY = "${SUPABASE_KEY}";
+  const ROW_ID = "${CLOUD_ROW_ID}";
+  const TABLE_URL = SUPABASE_URL + "/rest/v1/panorama_recetario_state";
+  const HEADERS = { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY };
+  let hydrating = true;
+  let timer = null;
+  let busy = false;
+  let pending = false;
   let cloudUpdatedAt = null;
-  let cloudBusy = false;
-  let pendingCloudSave = false;
 
-  function setSyncStatus(text, kind) {
+  function status(text, kind) {
     let el = document.getElementById("cloud-sync-status");
     if (!el) {
       el = document.createElement("button");
       el.id = "cloud-sync-status";
       el.type = "button";
-      el.style.cssText = "position:fixed;right:12px;bottom:12px;z-index:9999;padding:7px 11px;border-radius:999px;font:700 12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f4;color:#57534e;border:1px solid #e7e5e4;box-shadow:0 2px 8px rgba(0,0,0,.08);cursor:pointer;";
+      el.style.cssText = "position:fixed;right:12px;bottom:12px;z-index:9999;padding:7px 11px;border-radius:999px;font:700 12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f4;color:#57534e;border:1px solid #e7e5e4;box-shadow:0 2px 8px rgba(0,0,0,.08);cursor:pointer";
       el.title = "Sincronizar ahora";
-      el.onclick = function () { window.syncRecetarioNow(); };
+      el.onclick = function(){ window.syncRecetarioNow(); };
       document.body.appendChild(el);
     }
     el.textContent = text;
@@ -60,177 +62,107 @@
     else { el.style.background="#f0f9ff"; el.style.color="#075985"; el.style.borderColor="#bae6fd"; }
   }
 
-  function hasData(data) {
-    return !!(data && ((Array.isArray(data.recetas) && data.recetas.length) || (Array.isArray(data.insumos) && data.insumos.length)));
+  async function getCloud() {
+    const url = TABLE_URL + "?id=eq." + encodeURIComponent(ROW_ID) + "&select=data,updated_at";
+    const r = await fetch(url, { cache:"no-store", headers:HEADERS });
+    if (!r.ok) throw new Error("GET " + r.status + " " + await r.text());
+    const rows = await r.json();
+    return rows.length ? rows[0] : null;
   }
-  function normalize(data) {
-    return {
-      insumos: Array.isArray(data && data.insumos) ? data.insumos : [],
-      recetas: Array.isArray(data && data.recetas) ? data.recetas : []
-    };
-  }
-  async function cloudGet() {
-    const res = await fetch(CLOUD_FUNCTION, { method:"GET", cache:"no-store", headers: CLOUD_HEADERS });
-    if (!res.ok) throw new Error("GET " + res.status + " " + await res.text());
-    const rows = await res.json();
-    return Array.isArray(rows) && rows.length ? rows[0] : null;
-  }
-  async function cloudPut(state) {
-    const res = await fetch(CLOUD_FUNCTION, {
+
+  async function putCloud(data) {
+    const url = TABLE_URL + "?on_conflict=id";
+    const r = await fetch(url, {
       method:"POST",
       cache:"no-store",
-      headers: Object.assign({"Content-Type":"application/json"}, CLOUD_HEADERS),
-      body:JSON.stringify({data:normalize(state || appState)})
+      headers:Object.assign({"Content-Type":"application/json","Prefer":"resolution=merge-duplicates,return=representation"},HEADERS),
+      body:JSON.stringify({id:ROW_ID,data:data,updated_at:new Date().toISOString()})
     });
-    if (!res.ok) throw new Error("POST " + res.status + " " + await res.text());
-    const result = await res.json().catch(function(){return null;});
-    if (Array.isArray(result) && result[0] && result[0].updated_at) cloudUpdatedAt = result[0].updated_at;
+    if (!r.ok) throw new Error("POST " + r.status + " " + await r.text());
+    const rows = await r.json().catch(function(){return [];});
+    if (Array.isArray(rows) && rows[0]) cloudUpdatedAt = rows[0].updated_at || new Date().toISOString();
     else cloudUpdatedAt = new Date().toISOString();
   }
-  function rerenderAll() {
+
+  function rerender() {
     if (typeof renderInsumos === "function") renderInsumos();
     if (typeof renderRecipesTable === "function") renderRecipesTable();
     if (typeof renderInsumoOptions === "function") renderInsumoOptions();
     if (typeof updateSummaryCounts === "function") updateSummaryCounts();
   }
 
-  async function hydrateFromCloud() {
-    setSyncStatus("☁️ Comprobando datos…", "info");
+  async function hydrate() {
+    status("☁️ Comprobando datos…","info");
     try {
-      const row = await cloudGet();
-      const localHasData = hasData(appState);
-      if (row && hasData(row.data)) {
+      const row = await getCloud();
+      if (row) {
+        // Si la nube contiene un estado vacío, es una eliminación intencional.
+        // Nunca volvemos a subir automáticamente el local antiguo en ese caso.
+        appState = row.data && typeof row.data === "object" ? row.data : {insumos:[],recetas:[]};
         cloudUpdatedAt = row.updated_at || new Date().toISOString();
-        appState = normalize(row.data);
-        safeStorage.setItem(CLOUD_STORAGE_KEY, JSON.stringify(appState));
-        rerenderAll();
-        setSyncStatus("☁️ Sincronizado", "ok");
-      } else if (!row || !localHasData) {
-        await cloudPut(appState);
-        setSyncStatus("☁️ Datos guardados en la nube", "ok");
+        safeStorage.setItem("recetario_pro_data_v5", JSON.stringify(appState));
+        rerender();
+        status("☁️ Sincronizado","ok");
       } else {
-        await cloudPut(appState);
-        setSyncStatus("☁️ Datos locales subidos", "ok");
+        await putCloud(appState);
+        status("☁️ Datos guardados en la nube","ok");
       }
-    } catch (err) {
-      console.error("Sincronización Recetario:", err);
-      setSyncStatus("⚠️ Error de sincronización", "error");
-    } finally {
-      cloudHydrating = false;
-    }
+    } catch (e) {
+      console.error("Sincronización Recetario:",e);
+      status("⚠️ Error de sincronización","error");
+    } finally { hydrating = false; }
   }
 
-  window.queueCloudSave = function () {
-    if (cloudHydrating) return;
-    pendingCloudSave = true;
-    setSyncStatus(navigator.onLine ? "☁️ Guardando…" : "📴 Sin conexión (se guardará al reconectar)", navigator.onLine ? "info" : "error");
-    clearTimeout(cloudSaveTimer);
-    cloudSaveTimer = setTimeout(async function () {
-      if (cloudBusy) return;
-      if (!navigator.onLine) { setSyncStatus("📴 Sin conexión (pendiente)", "error"); return; }
-      cloudBusy = true;
-      try { await cloudPut(appState); pendingCloudSave = false; setSyncStatus("☁️ Sincronizado", "ok"); }
-      catch (err) { console.error("Error guardando Recetario:", err); setSyncStatus("⚠️ No se pudo sincronizar", "error"); }
-      finally { cloudBusy = false; }
-    }, 400);
+  window.queueCloudSave = function(){
+    if (hydrating) return;
+    pending = true;
+    status(navigator.onLine ? "☁️ Guardando…" : "📴 Pendiente de conexión", navigator.onLine ? "info" : "error");
+    clearTimeout(timer);
+    timer = setTimeout(async function(){
+      if (busy || !navigator.onLine) return;
+      busy = true;
+      try { await putCloud(appState); pending=false; status("☁️ Sincronizado","ok"); }
+      catch(e){ console.error("Guardado cloud:",e); status("⚠️ No se pudo sincronizar","error"); }
+      finally { busy=false; }
+    },400);
   };
 
-  async function retryPendingSyncIfOnline() {
-    if (!pendingCloudSave || cloudBusy || !navigator.onLine) return;
-    cloudBusy = true;
-    setSyncStatus("☁️ Reconectado, sincronizando…", "info");
-    try { await cloudPut(appState); pendingCloudSave = false; setSyncStatus("☁️ Sincronizado", "ok"); }
-    catch (err) { console.error("Reintento de sincronización falló:", err); setSyncStatus("⚠️ No se pudo sincronizar", "error"); }
-    finally { cloudBusy = false; }
-  }
-  window.addEventListener("online", retryPendingSyncIfOnline);
-
-  window.syncRecetarioNow = async function () {
-    clearTimeout(cloudSaveTimer);
-    if (cloudBusy) return;
-    cloudBusy = true;
-    setSyncStatus("☁️ Sincronizando…", "info");
-    try { await cloudPut(appState); setSyncStatus("☁️ Sincronizado", "ok"); }
-    catch (err) { console.error("Sincronización manual:", err); setSyncStatus("⚠️ Error de sincronización", "error"); }
-    finally { cloudBusy = false; }
+  window.syncRecetarioNow = async function(){
+    clearTimeout(timer);
+    if (busy) return;
+    busy=true; status("☁️ Sincronizando…","info");
+    try { await putCloud(appState); pending=false; status("☁️ Sincronizado","ok"); }
+    catch(e){ console.error("Sync manual:",e); status("⚠️ Error de sincronización","error"); }
+    finally { busy=false; }
   };
 
-  async function checkCloudForChanges() {
-    if (cloudBusy || cloudHydrating) return;
-    if (pendingCloudSave) { retryPendingSyncIfOnline(); return; }
+  async function checkChanges(){
+    if (busy || hydrating || pending) return;
     try {
-      const row = await cloudGet();
+      const row = await getCloud();
       if (!row || !row.updated_at || !cloudUpdatedAt) return;
-      if (new Date(row.updated_at).getTime() > new Date(cloudUpdatedAt).getTime() && hasData(row.data)) {
-        appState = normalize(row.data);
+      if (new Date(row.updated_at).getTime() > new Date(cloudUpdatedAt).getTime()) {
+        appState = row.data && typeof row.data === "object" ? row.data : {insumos:[],recetas:[]};
         cloudUpdatedAt = row.updated_at;
-        safeStorage.setItem(CLOUD_STORAGE_KEY, JSON.stringify(appState));
-        rerenderAll();
-        setSyncStatus("☁️ Actualizado", "ok");
+        safeStorage.setItem("recetario_pro_data_v5",JSON.stringify(appState));
+        rerender();
+        status("☁️ Actualizado","ok");
       }
-    } catch (err) { console.warn("No se pudo comprobar la nube:", err); }
+    } catch(e){ console.warn("Comprobación cloud:",e); }
   }
 
-  // Duplicar receta conservando ingredientes y ficha técnica.
-  window.duplicateRecipe = function (id) {
-    const original = appState.recetas.find(function(r){return r.id===id;});
-    if (!original) return;
-    const newName = window.prompt("Nombre de la nueva receta:", String(original.nombre||"")+" — Variante");
-    if (newName === null) return;
-    const cleanName = newName.trim();
-    if (!cleanName) { alert("Escribe un nombre para la nueva receta."); return; }
-    const clone = JSON.parse(JSON.stringify(original));
-    clone.id = "rec_"+Date.now()+"_"+Math.random().toString(36).slice(2,7);
-    clone.nombre = cleanName;
-    clone.ventas = 0;
-    clone.historial = [{fecha:new Date().toLocaleDateString("es-MX"),costo:calculateRecipeCost(clone),precio:Number(clone.precio)||0,motivo:"Duplicada de "+(original.nombre||"receta original")}];
-    appState.recetas.push(clone);
-    saveToStorage();
-    renderRecipesTable();
-    editRecipe(clone.id);
-  };
-
-  function csvCell(value) { const s=value==null?"":String(value); return '"'+s.replace(/"/g,'""')+'"'; }
-  window.exportSingleRecipeExcel = function(id) {
-    const rec=appState.recetas.find(function(r){return r.id===id;});
-    if(!rec)return;
-    const cost=calculateRecipeCost(rec),price=Number(rec.precio)||0,margin=price-cost,foodCostPct=price>0?cost/price*100:0,rendimiento=Number(rec.rendimiento)||1,costPerYield=rendimiento>0?cost/rendimiento:cost;
-    let csv="\\uFEFF";
-    csv+="PANORAMA RECETARIO — FICHA TÉCNICA COMPLETA\\n";
-    csv+="Producto;"+csvCell(rec.nombre)+"\\nCategoría;"+csvCell(rec.categoria||"")+"\\nPrecio de venta ($);"+price.toFixed(2)+"\\nVentas mensuales (uds);"+(Number(rec.ventas)||0)+"\\nRendimiento / porciones;"+rendimiento+"\\nCosto total de la receta ($);"+cost.toFixed(2)+"\\nCosto por porción / unidad de rendimiento ($);"+costPerYield.toFixed(2)+"\\nMargen de contribución ($);"+margin.toFixed(2)+"\\nFood Cost (%);"+foodCostPct.toFixed(2)+"%\\n\\n";
-    csv+="DESGLOSE COMPLETO DE INGREDIENTES\\nIngrediente;Cantidad de uso;Unidad;Costo unitario ($);Costo proporcional ($);Aprovechamiento (%)\\n";
-    (rec.ingredientes||[]).forEach(function(ing){const ins=appState.insumos.find(function(i){return i.id===ing.insumoId;});const cantidad=Number(ing.cantidad)||0,unit=ins?getInsumoUnidadBase(ins):"",unitCost=ins?getInsumoUnitCost(ins):0,subtotal=unitCost*cantidad,aprovechamiento=ins?getInsumoAprovechamiento(ins):0;csv+=csvCell(ins?ins.nombre:"Insumo eliminado")+";"+cantidad.toFixed(2)+";"+csvCell(unit)+";"+unitCost.toFixed(6)+";"+subtotal.toFixed(2)+";"+Number(aprovechamiento).toFixed(1)+"%\\n";});
-    csv+="\\nTOTALES; ; ; ;"+cost.toFixed(2)+";\\n\\nPROCEDIMIENTO / PREPARACIÓN\\n"+csvCell(rec.procedimiento||"")+"\\n\\nNOTAS / ESTÁNDAR DE PRESENTACIÓN\\n"+csvCell(rec.notas||"")+"\\n\\nHISTORIAL DE COSTOS\\nFecha;Costo ($);Precio de venta ($);Motivo\\n";
-    (rec.historial||[]).forEach(function(h){csv+=csvCell(h.fecha||"")+";"+Number(h.costo||0).toFixed(2)+";"+Number(h.precio||0).toFixed(2)+";"+csvCell(h.motivo||"")+"\\n";});
-    const safeName=String(rec.nombre||"receta").replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ_-]+/g,"_");
-    downloadFile(csv,"Ficha_Tecnica_Completa_"+safeName+".csv","text/csv;charset=utf-8;");
-  };
-
-  const originalRenderRecipesTable=window.renderRecipesTable;
-  window.renderRecipesTable=function(){
-    if(typeof originalRenderRecipesTable==="function")originalRenderRecipesTable();
-    const tbody=document.getElementById("recipes-list-table");
-    if(!tbody)return;
-    tbody.querySelectorAll("button").forEach(function(btn){
-      if(btn.textContent.trim()!=="Editar"||btn.dataset.duplicateAdded==="1")return;
-      const match=String(btn.getAttribute("onclick")||"").match(/editRecipe\\('([^']+)'\\)/);
-      if(!match)return;
-      const dup=document.createElement("button");dup.type="button";dup.className="btn btn-gold btn-sm";dup.textContent="Duplicar";dup.onclick=function(){window.duplicateRecipe(match[1]);};
-      btn.dataset.duplicateAdded="1";btn.parentNode.insertBefore(dup,btn.nextSibling);
-    });
-  };
-
-  hydrateFromCloud();
-  setInterval(checkCloudForChanges,15000);
-  window.addEventListener("focus",checkCloudForChanges);
-  document.addEventListener("visibilitychange",function(){if(!document.hidden)checkCloudForChanges();});
+  window.addEventListener("online",function(){ if(pending) window.queueCloudSave(); });
+  hydrate();
+  setInterval(checkChanges,15000);
+  window.addEventListener("focus",checkChanges);
+  document.addEventListener("visibilitychange",function(){if(!document.hidden)checkChanges();});
 })();
 <\/script>`;
     html = html.replace("</body>", patchScript + "\n</body>");
     document.open(); document.write(html); document.close();
   } catch (error) {
     const box=document.getElementById("app-loading");
-    if(box)box.innerHTML="No se pudo cargar Panorama Recetario. Cierra esta pestaña y vuelve a abrirla.";
+    if(box) box.innerHTML="No se pudo cargar Panorama Recetario. Cierra esta pestaña y vuelve a abrirla.";
     console.error(error);
   }
 })();
