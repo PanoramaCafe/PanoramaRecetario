@@ -8,11 +8,8 @@
   const LOCAL_KEY='recetario_pro_data_v5';
 
   function removeDeadCode(html){
-    const functionNames=['renderStockAuditTable','calculateAuditRow','resetStockAuditCounts','applyStockAudit','renderPurchaseSelectOptions','autoSuggestLowStockPurchases','addItemToPurchaseList','removePurchaseItem','renderCurrentPurchaseList','savePurchaseOrderAndOpenPdf','renderPurchaseHistory','viewHistoricalPoPdf','deleteHistoricalPo','openPurchaseOrderPdfModal','closePoPdfModal'];
-    functionNames.forEach(function(name){
-      const re=new RegExp('\\n?\\s*function\\s+'+name+'\\s*\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\s*\\}','m');
-      html=html.replace(re,'');
-    });
+    // La fuente histórica se conserva inmutable como respaldo. Los cambios estructurales
+    // frágiles no se aplican en tiempo de ejecución; los módulos futuros se aíslan aquí.
     return html;
   }
 
