@@ -6,164 +6,31 @@
 <meta name="theme-color" content="#1c1917">
 <meta name="robots" content="noindex">
 <title>Panorama Recetario</title>
+<style>html,body{margin:0;background:#fcfbf9;color:#1c1917;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}#app-loading{min-height:100vh;display:flex;align-items:center;justify-content:center;font-weight:700}</style>
 </head>
-<body style="margin:0;background:#fcfbf9;color:#1c1917;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
-<div id="app-loading" style="min-height:100vh;display:flex;align-items:center;justify-content:center;font-weight:700;">Cargando Panorama Recetario…</div>
+<body>
+<div id="app-loading">Cargando Panorama Recetario…</div>
 <script>
-(async function () {
-  const SOURCE = "https://raw.githubusercontent.com/PanoramaCafe/PanoramaRecetario/d9779bfd644cc90649d6f670930879bdf0fc6ce6/index.html";
-  const SUPABASE_URL = "https://dtmhffgpwxzdncbuoohb.supabase.co";
-  const SUPABASE_KEY = "sb_publishable_S_wZkfLNvx0mnHBLGHcfgg_Q_SkycdW";
-  const CLOUD_ROW_ID = "default";
-  try {
-    const response = await fetch(SOURCE, { cache: "no-store" });
-    if (!response.ok) throw new Error("HTTP " + response.status);
-    let html = await response.text();
-
-    // Evita el doble disparo del botón + Añadir en Safari/iPad.
-    html = html.replace(/\n\s*\/\/ Refuerzo: el bot[oó]n de a[ñn]adir tambi[eé]n funciona[\s\S]*?const qty = document\.getElementById\('rec-cant-insumo'\);[\s\S]*?\}\);\n\s*\}\);/m, "\n    });");
-    html = html.replace("function addIngredientToCurrentRecipe(event) {", "function addIngredientToCurrentRecipe(event) {\n      if (window.__addingIngredientLock) return false;\n      window.__addingIngredientLock = true;\n      setTimeout(function(){ window.__addingIngredientLock = false; }, 250);");
-
-    // Conecta el guardado interno de la app con la sincronización en la nube.
-    html = html.replace(/function saveToStorage\(\) \{[\s\S]*?\n    \}/m, `function saveToStorage() {
-      safeStorage.setItem('recetario_pro_data_v5', JSON.stringify(appState));
-      updateSummaryCounts();
-      if (typeof window.queueCloudSave === 'function') window.queueCloudSave();
-    }`);
-
-    const patchScript = `
-<script>
-(function () {
-  const SUPABASE_URL = "${SUPABASE_URL}";
-  const SUPABASE_KEY = "${SUPABASE_KEY}";
-  const ROW_ID = "${CLOUD_ROW_ID}";
-  const TABLE_URL = SUPABASE_URL + "/rest/v1/panorama_recetario_state";
-  const HEADERS = { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY };
-  let hydrating = true;
-  let timer = null;
-  let busy = false;
-  let pending = false;
-  let cloudUpdatedAt = null;
-
-  function status(text, kind) {
-    let el = document.getElementById("cloud-sync-status");
-    if (!el) {
-      el = document.createElement("button");
-      el.id = "cloud-sync-status";
-      el.type = "button";
-      el.style.cssText = "position:fixed;right:12px;bottom:12px;z-index:9999;padding:7px 11px;border-radius:999px;font:700 12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f4;color:#57534e;border:1px solid #e7e5e4;box-shadow:0 2px 8px rgba(0,0,0,.08);cursor:pointer";
-      el.title = "Sincronizar ahora";
-      el.onclick = function(){ window.syncRecetarioNow(); };
-      document.body.appendChild(el);
-    }
-    el.textContent = text;
-    if (kind === "ok") { el.style.background="#ecfdf5"; el.style.color="#065f46"; el.style.borderColor="#a7f3d0"; }
-    else if (kind === "error") { el.style.background="#fff1f2"; el.style.color="#9f1239"; el.style.borderColor="#fecdd3"; }
-    else { el.style.background="#f0f9ff"; el.style.color="#075985"; el.style.borderColor="#bae6fd"; }
-  }
-
-  async function getCloud() {
-    const url = TABLE_URL + "?id=eq." + encodeURIComponent(ROW_ID) + "&select=data,updated_at";
-    const r = await fetch(url, { cache:"no-store", headers:HEADERS });
-    if (!r.ok) throw new Error("GET " + r.status + " " + await r.text());
-    const rows = await r.json();
-    return rows.length ? rows[0] : null;
-  }
-
-  async function putCloud(data) {
-    const url = TABLE_URL + "?on_conflict=id";
-    const r = await fetch(url, {
-      method:"POST",
-      cache:"no-store",
-      headers:Object.assign({"Content-Type":"application/json","Prefer":"resolution=merge-duplicates,return=representation"},HEADERS),
-      body:JSON.stringify({id:ROW_ID,data:data,updated_at:new Date().toISOString()})
-    });
-    if (!r.ok) throw new Error("POST " + r.status + " " + await r.text());
-    const rows = await r.json().catch(function(){return [];});
-    if (Array.isArray(rows) && rows[0]) cloudUpdatedAt = rows[0].updated_at || new Date().toISOString();
-    else cloudUpdatedAt = new Date().toISOString();
-  }
-
-  function rerender() {
-    if (typeof renderInsumos === "function") renderInsumos();
-    if (typeof renderRecipesTable === "function") renderRecipesTable();
-    if (typeof renderInsumoOptions === "function") renderInsumoOptions();
-    if (typeof updateSummaryCounts === "function") updateSummaryCounts();
-  }
-
-  async function hydrate() {
-    status("☁️ Comprobando datos…","info");
-    try {
-      const row = await getCloud();
-      if (row) {
-        // Si la nube contiene un estado vacío, es una eliminación intencional.
-        // Nunca volvemos a subir automáticamente el local antiguo en ese caso.
-        appState = row.data && typeof row.data === "object" ? row.data : {insumos:[],recetas:[]};
-        cloudUpdatedAt = row.updated_at || new Date().toISOString();
-        safeStorage.setItem("recetario_pro_data_v5", JSON.stringify(appState));
-        rerender();
-        status("☁️ Sincronizado","ok");
-      } else {
-        await putCloud(appState);
-        status("☁️ Datos guardados en la nube","ok");
-      }
-    } catch (e) {
-      console.error("Sincronización Recetario:",e);
-      status("⚠️ Error de sincronización","error");
-    } finally { hydrating = false; }
-  }
-
-  window.queueCloudSave = function(){
-    if (hydrating) return;
-    pending = true;
-    status(navigator.onLine ? "☁️ Guardando…" : "📴 Pendiente de conexión", navigator.onLine ? "info" : "error");
-    clearTimeout(timer);
-    timer = setTimeout(async function(){
-      if (busy || !navigator.onLine) return;
-      busy = true;
-      try { await putCloud(appState); pending=false; status("☁️ Sincronizado","ok"); }
-      catch(e){ console.error("Guardado cloud:",e); status("⚠️ No se pudo sincronizar","error"); }
-      finally { busy=false; }
-    },400);
-  };
-
-  window.syncRecetarioNow = async function(){
-    clearTimeout(timer);
-    if (busy) return;
-    busy=true; status("☁️ Sincronizando…","info");
-    try { await putCloud(appState); pending=false; status("☁️ Sincronizado","ok"); }
-    catch(e){ console.error("Sync manual:",e); status("⚠️ Error de sincronización","error"); }
-    finally { busy=false; }
-  };
-
-  async function checkChanges(){
-    if (busy || hydrating || pending) return;
-    try {
-      const row = await getCloud();
-      if (!row || !row.updated_at || !cloudUpdatedAt) return;
-      if (new Date(row.updated_at).getTime() > new Date(cloudUpdatedAt).getTime()) {
-        appState = row.data && typeof row.data === "object" ? row.data : {insumos:[],recetas:[]};
-        cloudUpdatedAt = row.updated_at;
-        safeStorage.setItem("recetario_pro_data_v5",JSON.stringify(appState));
-        rerender();
-        status("☁️ Actualizado","ok");
-      }
-    } catch(e){ console.warn("Comprobación cloud:",e); }
-  }
-
-  window.addEventListener("online",function(){ if(pending) window.queueCloudSave(); });
-  hydrate();
-  setInterval(checkChanges,15000);
-  window.addEventListener("focus",checkChanges);
-  document.addEventListener("visibilitychange",function(){if(!document.hidden)checkChanges();});
-})();
-<\/script>`;
-    html = html.replace("</body>", patchScript + "\n</body>");
-    document.open(); document.write(html); document.close();
-  } catch (error) {
-    const box=document.getElementById("app-loading");
-    if(box) box.innerHTML="No se pudo cargar Panorama Recetario. Cierra esta pestaña y vuelve a abrirla.";
-    console.error(error);
+(async function(){
+  const SOURCE='https://raw.githubusercontent.com/PanoramaCafe/PanoramaRecetario/d9779bfd644cc90649d6f670930879bdf0fc6ce6/index.html';
+  const RUNTIME='https://raw.githubusercontent.com/PanoramaCafe/PanoramaRecetario/main/js/runtime.js';
+  try{
+    const [sourceResponse,runtimeResponse]=await Promise.all([
+      fetch(SOURCE,{cache:'no-store'}),
+      fetch(RUNTIME,{cache:'no-store'})
+    ]);
+    if(!sourceResponse.ok)throw new Error('Fuente HTTP '+sourceResponse.status);
+    if(!runtimeResponse.ok)throw new Error('Runtime HTTP '+runtimeResponse.status);
+    const html=await sourceResponse.text();
+    const runtime=await runtimeResponse.text();
+    new Function(runtime)();
+    const built=window.__panoramaBuild(html);
+    const finalHtml=built.replace('</body>',window.__panoramaSyncScript()+'\n</body>');
+    document.open();document.write(finalHtml);document.close();
+  }catch(error){
+    console.error('Panorama Recetario:',error);
+    const box=document.getElementById('app-loading');
+    if(box)box.innerHTML='No se pudo cargar Panorama Recetario. Cierra esta pestaña y vuelve a abrirla.';
   }
 })();
 </script>
