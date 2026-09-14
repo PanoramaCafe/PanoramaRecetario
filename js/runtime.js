@@ -1,26 +1,59 @@
 /* Panorama Recetario — runtime estable.
-   Punto único para mantenimiento, compatibilidad y sincronización. */
+   Capa única para compatibilidad, correcciones puntuales y UI de sincronización. */
 (function(){
-  const SUPABASE_URL='https://dtmhffgpwxzdncbuoohb.supabase.co';
-  const SUPABASE_KEY='sb_publishable_S_wZkfLNvx0mnHBLGHcfgg_Q_SkycdW';
-  const TABLE_URL=SUPABASE_URL+'/rest/v1/panorama_recetario_state';
-  const ROW_ID='default';
-  const LOCAL_KEY='recetario_pro_data_v5';
-
   function removeDeadCode(html){
-    // La fuente histórica se conserva inmutable como respaldo. Los cambios estructurales
-    // frágiles no se aplican en tiempo de ejecución; los módulos futuros se aíslan aquí.
+    // La fuente funcional se conserva intacta. No se eliminan bloques mediante regex
+    // porque eso puede romper funciones anidadas o cierres de JavaScript.
     return html;
   }
 
   function patchCore(html){
-    html=html.replace("function addIngredientToCurrentRecipe(event) {","function addIngredientToCurrentRecipe(event) {\n      if (window.__addingIngredientLock) return false;\n      window.__addingIngredientLock = true;\n      setTimeout(function(){ window.__addingIngredientLock = false; }, 250);");
-    html=html.replace(/function saveToStorage\(\) \{[\s\S]*?\n\s*\}/m,`function saveToStorage() {
+    // Evita el doble alta de ingredientes en Safari/iPad.
+    if(html.indexOf('window.__addingIngredientLock')===-1){
+      html=html.replace(
+        "function addIngredientToCurrentRecipe(event) {",
+        "function addIngredientToCurrentRecipe(event) {\n      if (window.__addingIngredientLock) return false;\n      window.__addingIngredientLock = true;\n      setTimeout(function(){ window.__addingIngredientLock = false; }, 250);"
+      );
+    }
+
+    // El guardado local también dispara la sincronización cloud. La función original
+    // usa un binding léxico, por eso se parchea el cuerpo antes de ejecutarla.
+    html=html.replace(/function saveToStorage\(\) \{[\s\S]*?\n\s*\}/m,
+`function saveToStorage() {
       safeStorage.setItem('recetario_pro_data_v5', JSON.stringify(appState));
       updateSummaryCounts();
       if (typeof window.queueCloudSave === 'function') window.queueCloudSave();
     }`);
     return html;
+  }
+
+  function patchSyncUI(html){
+    const css=`
+<style id="panorama-sync-ui">
+#cloud-sync-status{
+  position:fixed!important;
+  right:18px!important;
+  bottom:18px!important;
+  z-index:99999!important;
+  border:1px solid rgba(28,25,23,.12)!important;
+  border-radius:999px!important;
+  padding:10px 14px!important;
+  min-height:42px!important;
+  max-width:calc(100vw - 36px)!important;
+  box-sizing:border-box!important;
+  background:#fff!important;
+  color:#1c1917!important;
+  box-shadow:0 8px 24px rgba(0,0,0,.12)!important;
+  font:700 13px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif!important;
+  cursor:pointer!important;
+  -webkit-tap-highlight-color:transparent!important;
+}
+#cloud-sync-status[data-state="ok"]{border-color:rgba(22,101,52,.18)!important}
+#cloud-sync-status[data-state="error"]{border-color:rgba(185,28,28,.25)!important;color:#991b1b!important}
+#cloud-sync-status[data-state="info"]{border-color:rgba(180,83,9,.20)!important}
+@media(max-width:600px){#cloud-sync-status{right:12px!important;bottom:12px!important;font-size:12px!important;padding:9px 12px!important}}
+</style>`;
+    return html.replace('</head>',css+'\n</head>');
   }
 
   function patchAnalysis(html){
@@ -42,22 +75,12 @@ function renderAnalysis(){
     return html.replace('</body>','<script>'+fn+'<\\/script></body>');
   }
 
-  function syncScript(){return `<script>
-(function(){
-  const URL='${TABLE_URL}',KEY='${SUPABASE_KEY}',ROW='${ROW_ID}',LOCAL='${LOCAL_KEY}',H={apikey:KEY,Authorization:'Bearer '+KEY};
-  let updatedAt=null,timer=null,busy=false,pending=false,hydrating=true;
-  function normalize(data){return{insumos:Array.isArray(data&&data.insumos)?data.insumos:[],recetas:Array.isArray(data&&data.recetas)?data.recetas:[]};}
-  function status(text,kind){let e=document.getElementById('cloud-sync-status');if(!e){e=document.createElement('button');e.id='cloud-sync-status';e.type='button';e.className='sync-status';e.title='Sincronizar ahora';e.onclick=function(){window.syncRecetarioNow();};document.body.appendChild(e);}e.textContent=text;e.dataset.state=kind||'info';}
-  async function get(){const r=await fetch(URL+'?id=eq.'+encodeURIComponent(ROW)+'&select=data,updated_at',{cache:'no-store',headers:H});if(!r.ok)throw new Error('GET '+r.status+' '+await r.text());const rows=await r.json();return rows.length?rows[0]:null;}
-  async function put(state){const r=await fetch(URL+'?on_conflict=id',{method:'POST',cache:'no-store',headers:Object.assign({'Content-Type':'application/json',Prefer:'resolution=merge-duplicates,return=representation'},H),body:JSON.stringify({id:ROW,data:normalize(state),updated_at:new Date().toISOString()})});if(!r.ok)throw new Error('POST '+r.status+' '+await r.text());const rows=await r.json().catch(()=>[]);updatedAt=rows[0]&&rows[0].updated_at?rows[0].updated_at:new Date().toISOString();}
-  function apply(row){appState=normalize(row&&row.data);updatedAt=row&&row.updated_at?row.updated_at:new Date().toISOString();safeStorage.setItem(LOCAL,JSON.stringify(appState));renderInsumos();renderRecipesTable();renderInsumoOptions();updateSummaryCounts();}
-  async function hydrate(){status('☁️ Comprobando datos…','info');try{const row=await get();if(row){apply(row);status('☁️ Sincronizado','ok');}else{await put(appState);status('☁️ Datos guardados','ok');}}catch(e){console.error('Sincronización inicial:',e);status('⚠️ Error de sincronización','error');}finally{hydrating=false;}}
-  window.queueCloudSave=function(){if(hydrating)return;pending=true;const online=navigator.onLine!==false;status(online?'☁️ Guardando…':'📴 Pendiente de conexión',online?'info':'error');clearTimeout(timer);timer=setTimeout(async function(){if(busy||!pending||navigator.onLine===false)return;busy=true;try{await put(appState);pending=false;status('☁️ Sincronizado','ok');}catch(e){console.error('Guardado cloud:',e);status('⚠️ No se pudo sincronizar','error');}finally{busy=false;}},450);};
-  window.syncRecetarioNow=async function(){clearTimeout(timer);if(busy)return;busy=true;status('☁️ Sincronizando…','info');try{const row=await get();if(row&&row.updated_at&&updatedAt&&new Date(row.updated_at).getTime()>new Date(updatedAt).getTime())apply(row);else await put(appState);pending=false;status('☁️ Sincronizado','ok');}catch(e){console.error('Sincronización manual:',e);status('⚠️ Error de sincronización','error');}finally{busy=false;}};
-  async function check(){if(busy||hydrating||pending||navigator.onLine===false)return;try{const row=await get();if(row&&row.updated_at&&updatedAt&&new Date(row.updated_at).getTime()>new Date(updatedAt).getTime()){apply(row);status('☁️ Actualizado','ok');}}catch(e){console.warn('Comprobación cloud:',e);}}
-  window.addEventListener('online',function(){pending?window.queueCloudSave():check();});window.addEventListener('focus',check);document.addEventListener('visibilitychange',function(){if(!document.hidden)check();});hydrate();setInterval(check,15000);
-})();<\\/script>`;}
+  window.__panoramaBuild=function(html){
+    return patchSyncUI(patchAnalysis(patchCore(removeDeadCode(html))));
+  };
 
-  window.__panoramaBuild=function(html){return patchAnalysis(patchCore(removeDeadCode(html)));};
-  window.__panoramaSyncScript=syncScript;
+  // La fuente histórica ya contiene el único módulo de sincronización funcional.
+  // No se inyecta un segundo módulo: dos sincronizadores compitiendo pueden sobrescribir
+  // estados entre dispositivos y provocar que los cambios parezcan desaparecer.
+  window.__panoramaSyncScript=function(){ return ''; };
 })();
