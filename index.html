@@ -12,8 +12,9 @@
 <div id="app-loading">Cargando Panorama Recetario…</div>
 <script>
 (async function(){
-  const SOURCE='https://raw.githubusercontent.com/PanoramaCafe/PanoramaRecetario/d9779bfd644cc90649d6f670930879bdf0fc6ce6/index.html';
-  const RUNTIME='https://raw.githubusercontent.com/PanoramaCafe/PanoramaRecetario/main/js/runtime.js';
+  const VERSION='2026-09-13-sync-fix-2';
+  const SOURCE='https://raw.githubusercontent.com/PanoramaCafe/PanoramaRecetario/d9779bfd644cc90649d6f670930879bdf0fc6ce6/index.html?v='+VERSION;
+  const RUNTIME='https://raw.githubusercontent.com/PanoramaCafe/PanoramaRecetario/main/js/runtime.js?v='+VERSION;
   try{
     const [sourceResponse,runtimeResponse]=await Promise.all([
       fetch(SOURCE,{cache:'no-store'}),
