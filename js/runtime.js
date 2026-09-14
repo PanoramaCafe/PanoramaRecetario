@@ -1,14 +1,11 @@
 /* Panorama Recetario — runtime estable.
-   Capa única para compatibilidad, correcciones puntuales y UI de sincronización. */
+   Capa única para compatibilidad, correcciones puntuales, UI de sincronización y acciones de recetas. */
 (function(){
   function removeDeadCode(html){
-    // La fuente funcional se conserva intacta. No se eliminan bloques mediante regex
-    // porque eso puede romper funciones anidadas o cierres de JavaScript.
     return html;
   }
 
   function patchCore(html){
-    // Evita el doble alta de ingredientes en Safari/iPad.
     if(html.indexOf('window.__addingIngredientLock')===-1){
       html=html.replace(
         "function addIngredientToCurrentRecipe(event) {",
@@ -16,14 +13,52 @@
       );
     }
 
-    // El guardado local también dispara la sincronización cloud. La función original
-    // usa un binding léxico, por eso se parchea el cuerpo antes de ejecutarla.
     html=html.replace(/function saveToStorage\(\) \{[\s\S]*?\n\s*\}/m,
 `function saveToStorage() {
       safeStorage.setItem('recetario_pro_data_v5', JSON.stringify(appState));
       updateSummaryCounts();
       if (typeof window.queueCloudSave === 'function') window.queueCloudSave();
     }`);
+
+    // Duplicar una ficha técnica: conserva la estructura completa, pero crea un registro independiente.
+    if(html.indexOf('function duplicateRecipe(id)')===-1){
+      const duplicateFn=`
+    function duplicateRecipe(id) {
+      const original = appState.recetas.find(function(r) { return r.id === id; });
+      if (!original) return;
+      const suggested = String(original.nombre || '') + ' — Variante';
+      const requested = window.prompt('Nombre de la nueva ficha técnica:', suggested);
+      if (requested === null) return;
+      const newName = requested.trim();
+      if (!newName) {
+        alert('Escribe un nombre para la nueva ficha técnica.');
+        return;
+      }
+      const clone = JSON.parse(JSON.stringify(original));
+      clone.id = 'rec_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+      clone.nombre = newName;
+      clone.ventas = 0;
+      clone.historial = [{
+        fecha: new Date().toLocaleDateString('es-MX'),
+        costo: calculateRecipeCost(clone),
+        precio: Number(clone.precio) || 0,
+        motivo: 'Duplicada de ' + (original.nombre || 'receta original')
+      }];
+      appState.recetas.push(clone);
+      saveToStorage();
+      renderRecipesTable();
+      editRecipe(clone.id);
+    }
+`;
+      html=html.replace(/\n\s*function saveRecipe\(\) \{/, duplicateFn+'\n    function saveRecipe() {');
+    }
+
+    // Añade la acción Duplicar en el catálogo sin modificar las demás acciones.
+    const oldActions="'<button class=\"btn btn-secondary btn-sm\" onclick=\"viewHistory(\\\'' + r.id + '\\\')\">Hist.</button>' +";
+    const newActions="'<button class=\"btn btn-secondary btn-sm\" onclick=\"viewHistory(\\\'' + r.id + '\\\')\">Hist.</button>' +\n            '<button class=\"btn btn-gold btn-sm\" onclick=\"duplicateRecipe(\\\'' + r.id + '\\\')\">Duplicar</button>' +";
+    if(html.indexOf('onclick=\\\"duplicateRecipe')===-1){
+      html=html.replace(oldActions,newActions);
+    }
     return html;
   }
 
@@ -79,8 +114,5 @@ function renderAnalysis(){
     return patchSyncUI(patchAnalysis(patchCore(removeDeadCode(html))));
   };
 
-  // La fuente histórica ya contiene el único módulo de sincronización funcional.
-  // No se inyecta un segundo módulo: dos sincronizadores compitiendo pueden sobrescribir
-  // estados entre dispositivos y provocar que los cambios parezcan desaparecer.
   window.__panoramaSyncScript=function(){ return ''; };
 })();
