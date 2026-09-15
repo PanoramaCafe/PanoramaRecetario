@@ -53,13 +53,32 @@
       html=html.replace(/\n\s*function saveRecipe\(\) \{/, duplicateFn+'\n    function saveRecipe() {');
     }
 
-    // Añade la acción Duplicar en el catálogo sin modificar las demás acciones.
     const oldActions="'<button class=\"btn btn-secondary btn-sm\" onclick=\"viewHistory(\\\'' + r.id + '\\\')\">Hist.</button>' +";
     const newActions="'<button class=\"btn btn-secondary btn-sm\" onclick=\"viewHistory(\\\'' + r.id + '\\\')\">Hist.</button>' +\n            '<button class=\"btn btn-gold btn-sm\" onclick=\"duplicateRecipe(\\\'' + r.id + '\\\')\">Duplicar</button>' +";
     if(html.indexOf('onclick=\\\"duplicateRecipe')===-1){
       html=html.replace(oldActions,newActions);
     }
     return html;
+  }
+
+  function patchQuantityInput(html){
+    // La cantidad de uso se expresa en unidades reales (g, ml o pza).
+    // El control debe avanzar de 1 en 1, no de 0.1 en 0.1.
+    const script=`
+<script id="panorama-quantity-fix">
+(function(){
+  function fixQuantityInput(){
+    var input=document.getElementById('rec-cant-insumo');
+    if(!input) return;
+    input.setAttribute('step','1');
+    input.setAttribute('min','0');
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',fixQuantityInput);
+  else fixQuantityInput();
+  window.fixRecipeQuantityInput=fixQuantityInput;
+})();
+<\\/script>`;
+    return html.replace('</body>',script+'\n</body>');
   }
 
   function patchSyncUI(html){
@@ -111,7 +130,7 @@ function renderAnalysis(){
   }
 
   window.__panoramaBuild=function(html){
-    return patchSyncUI(patchAnalysis(patchCore(removeDeadCode(html))));
+    return patchQuantityInput(patchSyncUI(patchAnalysis(patchCore(removeDeadCode(html)))));
   };
 
   window.__panoramaSyncScript=function(){ return ''; };
