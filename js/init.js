@@ -1,7 +1,7 @@
 /* Panorama Recetario — inicialización y código de enlace */
 
 
-    let appState = loadAppState();
+    var appState = loadAppState();
     appState.insumos = (appState.insumos || []).map(function(ins){
       if (ins.aprovechamiento === undefined) ins.aprovechamiento = Math.max(0, 100 - (Number(ins.merma)||0));
       const compra = String(ins.unidadCompra || '').toLowerCase();
