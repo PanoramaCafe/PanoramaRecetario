@@ -10,30 +10,13 @@
 </head>
 <body>
 <div id="app-loading">Cargando Panorama Recetario…</div>
-<script>
-(async function(){
-  const VERSION='2026-09-13-sync-fix-2';
-  const SOURCE='https://raw.githubusercontent.com/PanoramaCafe/PanoramaRecetario/d9779bfd644cc90649d6f670930879bdf0fc6ce6/index.html?v='+VERSION;
-  const RUNTIME='https://raw.githubusercontent.com/PanoramaCafe/PanoramaRecetario/main/js/runtime.js?v='+VERSION;
-  try{
-    const [sourceResponse,runtimeResponse]=await Promise.all([
-      fetch(SOURCE,{cache:'no-store'}),
-      fetch(RUNTIME,{cache:'no-store'})
-    ]);
-    if(!sourceResponse.ok)throw new Error('Fuente HTTP '+sourceResponse.status);
-    if(!runtimeResponse.ok)throw new Error('Runtime HTTP '+runtimeResponse.status);
-    const html=await sourceResponse.text();
-    const runtime=await runtimeResponse.text();
-    new Function(runtime)();
-    const built=window.__panoramaBuild(html);
-    const finalHtml=built.replace('</body>',window.__panoramaSyncScript()+'\n</body>');
-    document.open();document.write(finalHtml);document.close();
-  }catch(error){
-    console.error('Panorama Recetario:',error);
-    const box=document.getElementById('app-loading');
-    if(box)box.innerHTML='No se pudo cargar Panorama Recetario. Cierra esta pestaña y vuelve a abrirla.';
-  }
-})();
-</script>
+
+  <script src="js/core.js"></script>
+  <script src="js/insumos.js"></script>
+  <script src="js/recetas.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/analysis.js"></script>
+  <script src="js/init.js"></script>
+  <script src="js/compat.js"></script>
 </body>
 </html>
