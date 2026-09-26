@@ -1,5 +1,26 @@
 /* Panorama Recetario — módulo core */
 
+    // Capa de almacenamiento segura para navegadores y PWA.
+    // Evita que una restricción del almacenamiento rompa toda la app.
+    var safeStorage = (function(){
+      try {
+        var storage = window.localStorage;
+        var probe = '__panorama_recetario_storage_probe__';
+        storage.setItem(probe, '1');
+        storage.removeItem(probe);
+        return storage;
+      } catch (e) {
+        return {
+          getItem: function(){ return null; },
+          setItem: function(){},
+          removeItem: function(){}
+        };
+      }
+    })();
+
+    // Estructura mínima de respaldo si todavía no existe información local.
+    var defaultData = { insumos: [], recetas: [] };
+
 
     function loadAppState() {
       try {
