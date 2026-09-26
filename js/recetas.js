@@ -272,7 +272,20 @@
       let csv = "\uFEFF";
       csv += "ID;Nombre;Categoria;Proveedor;Contacto;UnidadCompra;UnidadBase;CostoModo;CostoPorUnidadUso;AprovechamientoPct;PrecioCompra;ContenidoPresentacion\n";
       appState.insumos.forEach(function(i) {
-        csv += '"' + i.id + '";"' + i.nombre + '";"' + (i.categoria || '') + '";"' + (i.proveedor || '') + '";"' + (i.contacto || '') + '";"' + i.unidadCompra + '";' + i.costoCompra + ';' + i.merma + ';"' + i.unidadBase + '";' + (i.stockActual || 0) + ';' + (i.stockMin || 0) + '\n';
+        const costoUso = Number(getInsumoUnitCost(i)) || 0;
+        const aprovechamiento = Number(i.aprovechamiento ?? Math.max(0, 100 - (Number(i.merma) || 0)));
+        csv += '"' + (i.id || '') + '";' +
+          '"' + String(i.nombre || '').replace(/"/g, '""') + '";' +
+          '"' + String(i.categoria || '').replace(/"/g, '""') + '";' +
+          '"' + String(i.proveedor || '').replace(/"/g, '""') + '";' +
+          '"' + String(i.contacto || '').replace(/"/g, '""') + '";' +
+          '"' + String(i.unidadCompra || '') + '";' +
+          '"' + String(i.unidadBase || getInsumoUnidadBase(i) || '') + '";' +
+          '"' + String(i.costoModo || '') + '";' +
+          costoUso.toFixed(6) + ';' +
+          aprovechamiento.toFixed(2) + ';' +
+          (Number(i.costoCompra) || 0).toFixed(2) + ';' +
+          (Number(i.contenidoPresentacion) || 0) + '\n';
       });
       downloadFile(csv, "Insumos_Inventario_" + new Date().toISOString().split('T')[0] + ".csv", "text/csv;charset=utf-8;");
     }
