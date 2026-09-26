@@ -82,8 +82,9 @@
       if(!nombre){alert('Escribe el nombre del insumo.');return;}
       if(modo==='directo' && costoDirecto<=0){alert('Ingresa un costo directo por unidad de uso.');return;}
       if(modo==='conversion' && (costoCompra<=0||contenido<=0)){alert('Ingresa precio de compra y contenido de la presentación.');return;}
-      const factor = unidadCompra==='kg'||unidadCompra==='l' ? 1000 : 1;
-      const unidadBase = unidadCompra==='kg'?'g':unidadCompra==='l'?'ml':'pza';
+      const useOz = unidadCompra === 'l_oz';
+      const factor = unidadCompra === 'kg' ? 1000 : (useOz ? 33.8140227 : (unidadCompra === 'l' ? 1000 : 1));
+      const unidadBase = unidadCompra==='kg'?'g':useOz?'oz':unidadCompra==='l'?'ml':'pza';
       const costoPorUnidadUso = modo==='directo' ? costoDirecto : (costoCompra / Math.max(0.0001, contenido * factor)) / Math.max(0.0001,aprovechamiento/100);
       const data={nombre,categoria,proveedor:proveedor||'Proveedor General',contacto,unidadCompra,unidadBase,factor,contenidoPresentacion:contenido,costoCompra, costoModo:modo,costoDirecto:modo==='directo'?costoDirecto:null,costoPorUnidadUso,aprovechamiento,merma:100-aprovechamiento};
       if(id){const ins=appState.insumos.find(i=>i.id===id);if(ins)Object.assign(ins,data);}else{appState.insumos.push(Object.assign({id:'ins_'+Date.now()},data));}

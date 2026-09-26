@@ -7,7 +7,7 @@
       const compra = String(ins.unidadCompra || '').toLowerCase();
       const rawUnit = String(ins.unidadBase || '').toLowerCase();
       // Normaliza registros antiguos/importados que guardaron L o kg como unidad de uso.
-      // El Recetario trabaja siempre en ml, g o pza para que 150 ml se cobre como 150 ml.
+      // El Recetario trabaja en ml, g, oz o pza para que la cantidad de uso se cobre en la unidad seleccionada.
       if (!ins.__recetarioUnidadNormalizada && compra === 'l' && ['l','lt','litro','litros'].includes(rawUnit)) {
         if (isFinite(Number(ins.costoPorUnidadUso))) ins.costoPorUnidadUso = Number(ins.costoPorUnidadUso) / 1000;
         ins.unidadBase = 'ml';
