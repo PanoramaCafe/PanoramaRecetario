@@ -213,6 +213,7 @@
             '<button class="btn btn-secondary btn-sm" onclick="editRecipe(\'' + r.id + '\')">Editar</button>' +
             '<button class="btn btn-secondary btn-sm" onclick="viewRecipePdf(\'' + r.id + '\')">PDF</button>' +
             '<button class="btn btn-secondary btn-sm" onclick="viewHistory(\'' + r.id + '\')">Hist.</button>' +
+            '<button class="btn btn-gold btn-sm" onclick="duplicateRecipe(\'' + r.id + '\')">Duplicar</button>' +
             '<button class="btn btn-danger btn-sm" onclick="deleteRecipe(\'' + r.id + '\')">🗑️</button>' +
           '</div></td>' +
         '</tr>' +
