@@ -1,0 +1,50 @@
+/* Panorama Recetario — compatibilidad y correcciones validadas */
+(function(){
+  window.duplicateRecipe = window.duplicateRecipe || function(id){
+    const original=appState.recetas.find(function(r){return r.id===id;}); if(!original)return;
+    const requested=window.prompt('Nombre de la nueva ficha técnica:',String(original.nombre||'')+' — Variante'); if(requested===null)return;
+    const newName=requested.trim(); if(!newName){alert('Escribe un nombre para la nueva ficha técnica.');return;}
+    const clone=JSON.parse(JSON.stringify(original)); clone.id='rec_'+Date.now()+'_'+Math.random().toString(36).slice(2,7); clone.nombre=newName; clone.ventas=0;
+    clone.historial=[{fecha:new Date().toLocaleDateString('es-MX'),costo:calculateRecipeCost(clone),precio:Number(clone.precio)||0,motivo:'Duplicada de '+(original.nombre||'receta original')}];
+    appState.recetas.push(clone); saveToStorage(); renderRecipesTable(); editRecipe(clone.id);
+  };
+  function fixQuantityInput(){var input=document.getElementById('rec-cant-insumo');if(!input)return;input.setAttribute('step','1');input.setAttribute('min','0');}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',fixQuantityInput);else fixQuantityInput();
+  if(window.MutationObserver&&document.documentElement)new MutationObserver(fixQuantityInput).observe(document.documentElement,{childList:true,subtree:true});
+  const style=document.createElement('style');
+  style.textContent='#cloud-sync-status{position:fixed!important;right:18px!important;bottom:18px!important;z-index:99999!important;border:1px solid rgba(28,25,23,.12)!important;border-radius:999px!important;padding:10px 14px!important;min-height:42px!important;max-width:calc(100vw - 36px)!important;box-sizing:border-box!important;background:#fff!important;color:#1c1917!important;box-shadow:0 8px 24px rgba(0,0,0,.12)!important;font:700 13px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif!important;cursor:pointer!important}#cloud-sync-status[data-state="error"]{border-color:rgba(185,28,28,.25)!important;color:#991b1b!important}';
+  document.head.appendChild(style);
+
+  window.renderAnalysis = window.renderAnalysis || function(){
+    const recipes=Array.isArray(appState.recetas)?appState.recetas:[];
+    const food=document.getElementById('analysis-foodcost'),margin=document.getElementById('analysis-margin'),profit=document.getElementById('analysis-profit'),table=document.getElementById('analysis-table'),insights=document.getElementById('analysis-insights');
+    if(!recipes.length){if(food)food.innerText='0.0%';if(margin)margin.innerText='$0.00';if(profit)profit.innerText='$0.00';if(table)table.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:1.5rem">No hay recetas registradas.</td></tr>';if(insights)insights.innerText='Registra recetas para obtener el análisis.';return;}
+    let units=0,foodSum=0,marginSum=0,totalProfit=0;
+    const rows=recipes.map(function(r){const c=calculateRecipeCost(r),p=Number(r.precio)||0,v=Number(r.ventas)||0,m=p-c,f=p>0?c/p*100:0,pr=m*v;units+=v;foodSum+=f*v;marginSum+=m*v;totalProfit+=pr;return{r:r,c:c,p:p,v:v,m:m,f:f,pr:pr};});
+    const avgFood=units?foodSum/units:rows.reduce((a,x)=>a+x.f,0)/rows.length,avgMargin=units?marginSum/units:rows.reduce((a,x)=>a+x.m,0)/rows.length;
+    if(food)food.innerText=avgFood.toFixed(1)+'%';if(margin)margin.innerText='$'+avgMargin.toFixed(2);if(profit)profit.innerText='$'+totalProfit.toLocaleString('es-MX',{minimumFractionDigits:2});
+    if(table)table.innerHTML=rows.map(function(x){return '<tr><td><strong>'+x.r.nombre+'</strong></td><td class="font-mono" style="text-align:right">$'+x.c.toFixed(2)+'</td><td class="font-mono" style="text-align:right">$'+x.p.toFixed(2)+'</td><td class="font-mono" style="text-align:right">'+x.f.toFixed(1)+'%</td><td class="font-mono" style="text-align:right">$'+x.m.toFixed(2)+'</td><td class="font-mono" style="text-align:right">'+x.v+'</td><td class="font-mono" style="text-align:right">$'+x.pr.toFixed(2)+'</td></tr>';}).join('');
+    if(insights){const best=rows.slice().sort((a,b)=>b.pr-a.pr)[0];insights.innerHTML=best?'Mayor ganancia mensual estimada: <strong>'+best.r.nombre+'</strong> ($'+best.pr.toFixed(2)+').':'Sin datos suficientes.';}
+  };
+  window.viewRecipePdf = window.viewRecipePdf || function(id){
+    const rec=appState.recetas.find(function(r){return r.id===id;}); if(!rec)return;
+    const modal=document.getElementById('pdf-modal'),target=document.getElementById('printable-escandallo'); if(!modal||!target)return;
+    const cost=calculateRecipeCost(rec),price=Number(rec.precio)||0,food=price>0?cost/price*100:0;
+    target.innerHTML='<h1 style="margin-bottom:.5rem;">'+rec.nombre+'</h1><p><strong>Categoría:</strong> '+(rec.categoria||'')+' | <strong>Precio:</strong> $'+price.toFixed(2)+' | <strong>Costo:</strong> $'+cost.toFixed(2)+' | <strong>Food Cost:</strong> '+food.toFixed(1)+'%</p><hr style="margin:1rem 0"><h3>Ingredientes</h3>'+((rec.ingredientes||[]).map(function(x){return '<p>'+x.nombre+' — '+x.cantidad+' '+(x.unidad||'')+'</p>';}).join('')||'<p>Sin ingredientes.</p>')+'<h3 style="margin-top:1rem;">Procedimiento</h3><p style="white-space:pre-wrap;">'+(rec.procedimiento||'')+'</p><h3 style="margin-top:1rem;">Notas</h3><p style="white-space:pre-wrap;">'+(rec.notas||'')+'</p>';
+    modal.style.display='flex';
+  };
+  window.closePdfModal = window.closePdfModal || function(){const modal=document.getElementById('pdf-modal');if(modal)modal.style.display='none';};
+  window.printAllRecipes = window.printAllRecipes || function(){window.print();};
+  const SUPABASE_URL='https://dtmhffgpwxzdncbuoohb.supabase.co',SUPABASE_KEY='sb_publishable_S_wZkfLNvx0mnHBLGHcfgg_Q_SkycdW',TABLE_URL=SUPABASE_URL+'/rest/v1/panorama_recetario_state',ROW_ID='default',LOCAL_KEY='recetario_pro_data_v5';
+  let cloudUpdatedAt=null,cloudTimer=null,cloudBusy=false,cloudPending=false,cloudHydrating=true;
+  function cloudNormalize(data){return{insumos:Array.isArray(data&&data.insumos)?data.insumos:[],recetas:Array.isArray(data&&data.recetas)?data.recetas:[]};}
+  function cloudStatus(text,kind){let e=document.getElementById('cloud-sync-status');if(!e){e=document.createElement('button');e.id='cloud-sync-status';e.type='button';e.className='sync-status';e.title='Sincronizar ahora';e.onclick=function(){window.syncRecetarioNow();};document.body.appendChild(e);}e.textContent=text;e.dataset.state=kind||'info';}
+  async function cloudGet(){const r=await fetch(TABLE_URL+'?id=eq.'+encodeURIComponent(ROW_ID)+'&select=data,updated_at',{cache:'no-store',headers:{apikey:SUPABASE_KEY,Authorization:'Bearer '+SUPABASE_KEY}});if(!r.ok)throw new Error('GET '+r.status+' '+await r.text());const rows=await r.json();return rows.length?rows[0]:null;}
+  async function cloudPut(state){const r=await fetch(TABLE_URL+'?on_conflict=id',{method:'POST',cache:'no-store',headers:{apikey:SUPABASE_KEY,Authorization:'Bearer '+SUPABASE_KEY,'Content-Type':'application/json',Prefer:'resolution=merge-duplicates,return=representation'},body:JSON.stringify({id:ROW_ID,data:cloudNormalize(state),updated_at:new Date().toISOString()})});if(!r.ok)throw new Error('POST '+r.status+' '+await r.text());const rows=await r.json().catch(function(){return[];});cloudUpdatedAt=rows[0]&&rows[0].updated_at?rows[0].updated_at:new Date().toISOString();}
+  function cloudApply(row){appState=cloudNormalize(row&&row.data);cloudUpdatedAt=row&&row.updated_at?row.updated_at:new Date().toISOString();safeStorage.setItem(LOCAL_KEY,JSON.stringify(appState));renderInsumos();renderRecipesTable();renderInsumoOptions();updateSummaryCounts();}
+  async function cloudHydrate(){cloudStatus('☁️ Comprobando datos…','info');try{const row=await cloudGet();if(row){cloudApply(row);cloudStatus('☁️ Sincronizado','ok');}else{await cloudPut(appState);cloudStatus('☁️ Datos guardados','ok');}}catch(e){console.error('Sincronización inicial:',e);cloudStatus('⚠️ Error de sincronización','error');}finally{cloudHydrating=false;}}
+  window.queueCloudSave=function(){if(cloudHydrating)return;cloudPending=true;const online=navigator.onLine!==false;cloudStatus(online?'☁️ Guardando…':'📴 Pendiente de conexión',online?'info':'error');clearTimeout(cloudTimer);cloudTimer=setTimeout(async function(){if(cloudBusy||!cloudPending||navigator.onLine===false)return;cloudBusy=true;try{await cloudPut(appState);cloudPending=false;cloudStatus('☁️ Sincronizado','ok');}catch(e){console.error('Guardado cloud:',e);cloudStatus('⚠️ No se pudo sincronizar','error');}finally{cloudBusy=false;}},450);};
+  window.syncRecetarioNow=async function(){clearTimeout(cloudTimer);if(cloudBusy)return;cloudBusy=true;cloudStatus('☁️ Sincronizando…','info');try{const row=await cloudGet();if(row&&row.updated_at&&cloudUpdatedAt&&new Date(row.updated_at).getTime()>new Date(cloudUpdatedAt).getTime())cloudApply(row);else await cloudPut(appState);cloudPending=false;cloudStatus('☁️ Sincronizado','ok');}catch(e){console.error('Sincronización manual:',e);cloudStatus('⚠️ Error de sincronización','error');}finally{cloudBusy=false;}};
+  async function cloudCheck(){if(cloudBusy||cloudHydrating||cloudPending||navigator.onLine===false)return;try{const row=await cloudGet();if(row&&row.updated_at&&cloudUpdatedAt&&new Date(row.updated_at).getTime()>new Date(cloudUpdatedAt).getTime()){cloudApply(row);cloudStatus('☁️ Actualizado','ok');}}catch(e){console.warn('Comprobación cloud:',e);}}
+  window.addEventListener('online',function(){cloudPending?window.queueCloudSave():cloudCheck();});window.addEventListener('focus',cloudCheck);document.addEventListener('visibilitychange',function(){if(!document.hidden)cloudCheck();});cloudHydrate();setInterval(cloudCheck,15000);
+})();
