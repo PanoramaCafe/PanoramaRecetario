@@ -97,6 +97,7 @@
       if (raw === 'kg' || raw === 'kilogramo' || raw === 'kilogramos' || compra === 'kg') return 'g';
       if (raw === 'l' || raw === 'lt' || raw === 'litro' || raw === 'litros' || compra === 'l') return 'ml';
       if (raw === 'ml' || raw === 'mililitro' || raw === 'mililitros') return 'ml';
+      if (raw === 'oz' || raw === 'onza' || raw === 'onzas' || raw === 'fl oz' || raw === 'floz') return 'oz';
       if (raw === 'g' || raw === 'gramo' || raw === 'gramos') return 'g';
       return raw || 'pza';
     }
