@@ -90,10 +90,8 @@
       renderInsumoOptions();
       updateSummaryCounts();
 
-      // Refuerzo: el botón de añadir también funciona mediante listener
-      // directo, independientemente de cómo Safari procese el HTML inline.
-      const addBtn = document.querySelector('#tab-recetas button[onclick*="addIngredientToCurrentRecipe"]');
-      if (addBtn) addBtn.addEventListener('click', function(e) { addIngredientToCurrentRecipe(e); });
+      // El botón de añadir usa únicamente su handler inline para evitar doble inserción.
+      // Enter en cantidad conserva el acceso rápido sin duplicar el click.
       const qty = document.getElementById('rec-cant-insumo');
       if (qty) qty.addEventListener('keydown', function(e) {
         if (e.key === 'Enter') { e.preventDefault(); addIngredientToCurrentRecipe(e); }
