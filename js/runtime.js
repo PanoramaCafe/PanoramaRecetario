@@ -63,7 +63,8 @@
 
   function patchQuantityInput(html){
     // La cantidad de uso se expresa en unidades reales (g, ml o pza).
-    // El control debe avanzar de 1 en 1, no de 0.1 en 0.1.
+    // El formulario se renderiza dinámicamente en algunos flujos, por lo que
+    // el control se refuerza tanto al cargar como cuando aparece en el DOM.
     const script=`
 <script id="panorama-quantity-fix">
 (function(){
@@ -75,6 +76,11 @@
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',fixQuantityInput);
   else fixQuantityInput();
+
+  var observer=new MutationObserver(function(){
+    fixQuantityInput();
+  });
+  if(document.documentElement) observer.observe(document.documentElement,{childList:true,subtree:true});
   window.fixRecipeQuantityInput=fixQuantityInput;
 })();
 <\\/script>`;
