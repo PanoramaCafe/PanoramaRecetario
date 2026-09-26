@@ -20,6 +20,7 @@
     function saveToStorage() {
       safeStorage.setItem('recetario_pro_data_v5', JSON.stringify(appState));
       updateSummaryCounts();
+      if (typeof window.queueCloudSave === 'function') window.queueCloudSave();
     }
 
 
