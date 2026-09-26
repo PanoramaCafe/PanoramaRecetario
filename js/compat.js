@@ -35,7 +35,7 @@
   };
   window.closePdfModal = window.closePdfModal || function(){const modal=document.getElementById('pdf-modal');if(modal)modal.style.display='none';};
   window.printAllRecipes = window.printAllRecipes || function(){window.print();};
-  const SUPABASE_URL='https://dtmhffgpwxzdncbuoohb.supabase.co',SUPABASE_KEY='sb_publishable_S_WzKF9LNvx0mnHBLGHcfgg_Q_SkycdW',TABLE_URL=SUPABASE_URL+'/rest/v1/panorama_recetario_state',ROW_ID='default',LOCAL_KEY='recetario_pro_data_v5';
+  const SUPABASE_URL='https://dtmhffgpwxzdncbuoohb.supabase.co',SUPABASE_KEY='sb_publishable_S_wZkfLNvx0mnHBLGHcfgg_Q_SkycdW',TABLE_URL=SUPABASE_URL+'/rest/v1/panorama_recetario_state',ROW_ID='default',LOCAL_KEY='recetario_pro_data_v5';
   let cloudUpdatedAt=null,cloudTimer=null,cloudBusy=false,cloudPending=false,cloudHydrating=true,localDirtyAt=null;
   function cloudNormalize(data){return{insumos:Array.isArray(data&&data.insumos)?data.insumos:[],recetas:Array.isArray(data&&data.recetas)?data.recetas:[]};}
   function cloudStatus(text,kind){let e=document.getElementById('cloud-sync-status');if(!e){e=document.createElement('button');e.id='cloud-sync-status';e.type='button';e.className='sync-status';e.title='Sincronizar ahora';e.onclick=function(){window.syncRecetarioNow();};document.body.appendChild(e);}e.textContent=text;e.dataset.state=kind||'info';}
