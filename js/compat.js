@@ -30,7 +30,14 @@
     const rec=appState.recetas.find(function(r){return r.id===id;}); if(!rec)return;
     const modal=document.getElementById('pdf-modal'),target=document.getElementById('printable-escandallo'); if(!modal||!target)return;
     const cost=calculateRecipeCost(rec),price=Number(rec.precio)||0,food=price>0?cost/price*100:0;
-    target.innerHTML='<h1 style="margin-bottom:.5rem;">'+rec.nombre+'</h1><p><strong>Categoría:</strong> '+(rec.categoria||'')+' | <strong>Precio:</strong> $'+price.toFixed(2)+' | <strong>Costo:</strong> $'+cost.toFixed(2)+' | <strong>Food Cost:</strong> '+food.toFixed(1)+'%</p><hr style="margin:1rem 0"><h3>Ingredientes</h3>'+((rec.ingredientes||[]).map(function(x){const ins=appState.insumos.find(function(i){return String(i.id)===String(x.insumoId);});if(!ins)return '<p>Insumo no encontrado — '+Number(x.cantidad||0).toFixed(2)+'</p>';const unit=ins.unidadBase||getInsumoUnidadBase(ins)||'';const sub=getInsumoUnitCost(ins)*Number(x.cantidad||0);return '<p>'+String(ins.nombre||'').replace(/</g,'&lt;')+' — '+Number(x.cantidad||0).toFixed(2)+' '+unit+' — +'<h3 style="margin-top:1rem;">Procedimiento</h3><p style="white-space:pre-wrap;">'+(rec.procedimiento||'')+'</p><h3 style="margin-top:1rem;">Notas</h3><p style="white-space:pre-wrap;">'+(rec.notas||'')+'</p>';
+    const ingredients=(rec.ingredientes||[]).map(function(x){
+      const ins=appState.insumos.find(function(i){return String(i.id)===String(x.insumoId);});
+      if(!ins)return '<p>Insumo no encontrado — '+Number(x.cantidad||0).toFixed(2)+'</p>';
+      const unit=ins.unidadBase||getInsumoUnidadBase(ins)||'';
+      const sub=getInsumoUnitCost(ins)*Number(x.cantidad||0);
+      return '<p>'+String(ins.nombre||'').replace(/</g,'&lt;')+' — '+Number(x.cantidad||0).toFixed(2)+' '+unit+' — $'+sub.toFixed(2)+'</p>';
+    }).join('');
+    target.innerHTML='<h1 style="margin-bottom:.5rem;">'+rec.nombre+'</h1><p><strong>Categoría:</strong> '+(rec.categoria||'')+' | <strong>Precio:</strong> $'+price.toFixed(2)+' | <strong>Costo:</strong> $'+cost.toFixed(2)+' | <strong>Food Cost:</strong> '+food.toFixed(1)+'%</p><hr style="margin:1rem 0"><h3>Ingredientes</h3>'+(ingredients||'<p>Sin ingredientes.</p>')+'<h3 style="margin-top:1rem;">Procedimiento</h3><p style="white-space:pre-wrap;">'+(rec.procedimiento||'')+'</p><h3 style="margin-top:1rem;">Notas</h3><p style="white-space:pre-wrap;">'+(rec.notas||'')+'</p>';
     modal.style.display='flex';
   };
   window.closePdfModal = window.closePdfModal || function(){const modal=document.getElementById('pdf-modal');if(modal)modal.style.display='none';};
